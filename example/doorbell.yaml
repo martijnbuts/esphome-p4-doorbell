@@ -1,0 +1,440 @@
+# --- Doorbell page for an ESP32-P4 LVGL display ---------------------------------
+# When the doorbell rings, a page with the live picture of the doorbell camera opens,
+# and the doorbell audio plays on the display's own media player. A video button
+# (script doorbell_live) opens the same page without a ring.
+#
+#   - Video: MJPEG stream from the go2rtc add-on (see example/go2rtc.yaml). The
+#     jpeg_stream component receives it in a background task and decodes every frame
+#     with the ESP32-P4 hardware JPEG decoder; the main loop only swaps the canvas buffer.
+#   - Fallback: after 3 failed attempts with go2rtc it switches to snapshots through the
+#     camera proxy of Home Assistant (about 3-4 frames per second).
+#   - Audio: Home Assistant plays the go2rtc AAC stream (fetched over 127.0.0.1, so no
+#     password) as an announcement on this display's media player. Music pauses meanwhile.
+#   - The page closes with the Back button or by itself after ${close_after}.
+#   - Every 5 s the log (INFO) shows frames per 5 s, decode time and skipped frames.
+#
+# Include it with these vars (all required):
+#   doorbell_sensor:   binary_sensor that turns on when someone rings (Home Assistant)
+#   camera_entity:     camera entity of the doorbell in Home Assistant (fallback snapshots)
+#   ha_url:            URL of Home Assistant that the display can reach, without a trailing /
+#   go2rtc_url:        http://<ha-ip>:1984
+#   go2rtc_user:       user name from go2rtc.yaml
+#   go2rtc_password:   password from go2rtc.yaml (use !secret)
+#   go2rtc_stream:     go2rtc stream with the MJPEG video (doorbell_mjpeg)
+#   go2rtc_audio:      go2rtc stream with the audio (doorbell)
+#   media_player_id:   ESPHome id of the display's speaker media player
+#   display_media_player: the same media player as Home Assistant entity
+#   time_id:           ESPHome id of the homeassistant time source
+#   home_page:         LVGL page to return to
+#   close_after:       how long the page stays open, e.g. 90s
+
+font:
+  - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: doorbell_icons
+    size: 32
+    bpp: 4
+    glyphs:
+      - "\U000F004D"   # arrow-left
+      - "\U000F0869"   # doorbell-video
+      - "\U000F009E"   # bell-ring
+  - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: doorbell_icon_large
+    size: 96
+    bpp: 4
+    glyphs:
+      - "\U000F0869"   # doorbell-video (until the first frame arrives)
+
+# Background task + hardware JPEG decoder (components/jpeg_stream), draws on canvas doorbell_video
+jpeg_stream:
+  - id: doorbell_stream
+    canvas: doorbell_video
+    max_width: 640
+    max_height: 480
+    # go2rtc only answers once ffmpeg has the first frame (it waits for a key frame)
+    timeout: 10s
+    on_frame:
+      - lambda: |-
+          id(doorbell_frames)++;
+          id(doorbell_errors) = 0;
+          id(doorbell_last_frame) = millis();
+          if (lv_obj_has_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN))
+            lv_obj_remove_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN);
+    # 3 errors in a row with go2rtc: carry on with snapshots through Home Assistant
+    on_error:
+      - lambda: 'id(doorbell_errors)++;'
+      - if:
+          condition:
+            lambda: 'return !id(doorbell_via_ha) && id(doorbell_errors) >= 3 && id(doorbell_camera_path).state.rfind("/api/", 0) == 0;'
+          then:
+            - logger.log:
+                level: WARN
+                tag: doorbell
+                format: "go2rtc not reachable, using snapshots through Home Assistant"
+            - globals.set:
+                id: doorbell_via_ha
+                value: "true"
+            - jpeg_stream.set_url:
+                id: doorbell_stream
+                url: !lambda 'return std::string("${ha_url}") + id(doorbell_camera_path).state;'
+
+globals:
+  - id: doorbell_frames        # frames since the last measurement (frames per second)
+    type: int
+    initial_value: "0"
+  - id: doorbell_last_frame    # millis() of the last frame drawn
+    type: uint32_t
+    initial_value: "0"
+  - id: doorbell_errors        # errors in a row (after 3 with go2rtc: fallback)
+    type: int
+    initial_value: "0"
+  - id: doorbell_via_ha        # true = snapshots through Home Assistant instead of go2rtc
+    type: bool
+    initial_value: "false"
+
+script:
+  # Someone rang the doorbell
+  - id: doorbell_ring
+    then:
+      - lvgl.label.update:
+          id: doorbell_title_icon
+          text: "\U000F009E"
+          text_color: 0xFFA53D
+      - lvgl.label.update:
+          id: doorbell_title
+          text: "Someone rang the bell"
+      - script.execute: doorbell_set_time
+      - script.execute: doorbell_show
+
+  # Look without a ring (video button, or the button in Home Assistant)
+  - id: doorbell_live
+    then:
+      - lvgl.label.update:
+          id: doorbell_title_icon
+          text: "\U000F0869"
+          text_color: 0x4C8DFF
+      - lvgl.label.update:
+          id: doorbell_title
+          text: "Live view"
+      - script.execute: doorbell_set_time
+      - script.execute: doorbell_show
+
+  - id: doorbell_set_time
+    then:
+      - if:
+          condition:
+            time.has_time:
+              id: ${time_id}
+          then:
+            - lvgl.label.update:
+                id: doorbell_time
+                text:
+                  time_format: "%H:%M:%S"
+                  time: ${time_id}
+
+  - id: doorbell_show
+    then:
+      - if:
+          condition:
+            not:
+              lvgl.page.is_showing: doorbell_page
+          then:
+            # no old picture until the first new one has arrived
+            - lvgl.widget.hide: doorbell_video
+            - lvgl.label.update:
+                id: doorbell_status
+                text: "connecting..."
+            - lvgl.page.show:
+                id: doorbell_page
+                animation: MOVE_LEFT
+                time: 250ms
+            - globals.set:
+                id: doorbell_errors
+                value: "0"
+            - globals.set:
+                id: doorbell_via_ha
+                value: "false"
+            - jpeg_stream.start:
+                id: doorbell_stream
+                url: !lambda |-
+                  // http://user:password@host:1984/api/stream.mjpeg?src=<stream>
+                  std::string url = "${go2rtc_url}";
+                  const size_t pos = url.find("://");
+                  if (pos != std::string::npos)
+                    url.insert(pos + 3, std::string("${go2rtc_user}:${go2rtc_password}@"));
+                  return url + "/api/stream.mjpeg?src=${go2rtc_stream}";
+            # doorbell audio as an announcement on this display (played by Home Assistant)
+            - homeassistant.action:
+                action: media_player.play_media
+                data:
+                  entity_id: ${display_media_player}
+                  media_content_id: "http://127.0.0.1:1984/api/stream.aac?src=${go2rtc_audio}"
+                  media_content_type: music
+                  announce: "true"
+      - script.execute: doorbell_auto_close
+
+  - id: doorbell_auto_close
+    mode: restart
+    then:
+      - delay: ${close_after}
+      - script.execute: doorbell_close
+
+  - id: doorbell_close
+    then:
+      - script.stop: doorbell_auto_close
+      - jpeg_stream.stop: doorbell_stream
+      - if:
+          condition:
+            media_player.is_announcing: ${media_player_id}
+          then:
+            - media_player.stop:
+                id: ${media_player_id}
+                announcement: true
+      - if:
+          condition:
+            lvgl.page.is_showing: doorbell_page
+          then:
+            - lvgl.page.show:
+                id: ${home_page}
+                animation: MOVE_RIGHT
+                time: 250ms
+      - lvgl.widget.hide: doorbell_video
+
+binary_sensor:
+  - platform: homeassistant
+    id: doorbell_ring_sensor
+    entity_id: ${doorbell_sensor}
+    internal: true
+    on_press:
+      - script.execute: doorbell_ring
+
+text_sensor:
+  - platform: homeassistant
+    id: doorbell_camera_path
+    entity_id: ${camera_entity}
+    attribute: entity_picture
+    internal: true
+    # Home Assistant renews the access token every few minutes: the next snapshot uses
+    # the new path (only while the fallback through Home Assistant is in use)
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(doorbell_via_ha) && x.rfind("/api/", 0) == 0;'
+          then:
+            - jpeg_stream.set_url:
+                id: doorbell_stream
+                url: !lambda 'return std::string("${ha_url}") + x;'
+
+button:
+  - platform: template
+    name: "Open doorbell camera"
+    icon: mdi:doorbell-video
+    on_press:
+      - script.execute: doorbell_live
+
+# Clock and status (frames per second) while the page is open
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lvgl.page.is_showing: doorbell_page
+          then:
+            - lambda: |-
+                auto now = id(${time_id}).now();
+                if (now.is_valid()) {
+                  const std::string s = now.strftime("%H:%M");
+                  if (s != lv_label_get_text(id(doorbell_clock)))
+                    lv_label_set_text(id(doorbell_clock), s.c_str());
+                }
+                // average over 5 s
+                static int sec = 0;
+                if (++sec < 5)
+                  return;
+                sec = 0;
+                const int n = id(doorbell_frames);
+                id(doorbell_frames) = 0;
+                if (n > 0)
+                  ESP_LOGI("doorbell", "%s: %d frames in 5 s, last frame %u ms, %u skipped",
+                           id(doorbell_via_ha) ? "HA" : "go2rtc", n,
+                           (unsigned) id(doorbell_stream).get_last_frame_time(),
+                           (unsigned) id(doorbell_stream).get_dropped_count());
+                const uint32_t since = millis() - id(doorbell_last_frame);
+                if (id(doorbell_last_frame) != 0 && since < 5000) {
+                  lv_label_set_text_fmt(id(doorbell_status), "Live: %.0f fps%s", n / 5.0f,
+                                        id(doorbell_via_ha) ? " (via HA)" : "");
+                } else if (lv_obj_has_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN)) {
+                  lv_label_set_text(id(doorbell_status), "connecting...");
+                } else {
+                  lv_label_set_text(id(doorbell_status), "no new picture");
+                }
+
+lvgl:
+  pages:
+    - id: doorbell_page
+      bg_color: 0x0B0F14
+      bg_opa: COVER
+      pad_all: 12
+      scrollable: false
+      layout:
+        type: FLEX
+        flex_flow: COLUMN
+        pad_row: 12
+      widgets:
+
+        # -- Header: back, title, clock ------------------------------------------
+        - obj:
+            width: 100%
+            height: 64
+            bg_color: 0x151B23
+            border_width: 0
+            radius: 12
+            pad_left: 12
+            pad_right: 16
+            scrollable: false
+            widgets:
+              - button:
+                  align: LEFT_MID
+                  width: 150
+                  height: 48
+                  on_click:
+                    - script.execute: doorbell_close
+                  widgets:
+                    - label:
+                        align: LEFT_MID
+                        x: 14
+                        text_font: doorbell_icons
+                        text: "\U000F004D"
+                    - label:
+                        align: LEFT_MID
+                        x: 54
+                        text_font: montserrat_24
+                        text: "Back"
+              - label:
+                  align: LEFT_MID
+                  x: 168
+                  text_font: doorbell_icons
+                  text_color: 0xFFA53D
+                  text: "\U000F0869"
+              - label:
+                  align: LEFT_MID
+                  x: 210
+                  text_font: montserrat_28
+                  text_color: 0xE8ECF1
+                  text: "Front door"
+              - label:
+                  id: doorbell_clock
+                  align: RIGHT_MID
+                  text_font: montserrat_28
+                  text_color: 0xE8ECF1
+                  text: "--:--"
+
+        # -- Camera picture left, info right -------------------------------------
+        - obj:
+            width: 100%
+            flex_grow: 1
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            scrollable: false
+            layout:
+              type: FLEX
+              flex_flow: ROW
+              pad_column: 12
+            widgets:
+
+              # camera picture 640x480 (card 664 wide, picture in the middle)
+              - obj:
+                  width: 664
+                  height: 100%
+                  pad_all: 0
+                  bg_color: 0x000000
+                  border_width: 0
+                  radius: 12
+                  clip_corner: true
+                  scrollable: false
+                  widgets:
+                    - label:
+                        align: CENTER
+                        text_font: doorbell_icon_large
+                        text_color: 0x2A3340
+                        text: "\U000F0869"
+                    # jpeg_stream puts its own buffers in here and sizes the canvas to the picture
+                    - canvas:
+                        id: doorbell_video
+                        align: CENTER
+                        width: 16
+                        height: 16
+                        hidden: true
+
+              # info and back button
+              - obj:
+                  flex_grow: 1
+                  height: 100%
+                  bg_color: 0x151B23
+                  border_width: 0
+                  radius: 12
+                  pad_all: 16
+                  scrollable: false
+                  layout:
+                    type: FLEX
+                    flex_flow: COLUMN
+                    pad_row: 8
+                  widgets:
+                    - obj:
+                        width: 100%
+                        height: SIZE_CONTENT
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout:
+                          type: FLEX
+                          flex_flow: ROW
+                          flex_align_cross: CENTER
+                          pad_column: 8
+                        widgets:
+                          - label:
+                              id: doorbell_title_icon
+                              text_font: doorbell_icons
+                              text_color: 0xFFA53D
+                              text: "\U000F009E"
+                          - label:
+                              id: doorbell_title
+                              text_font: montserrat_18
+                              text_color: 0x8A94A3
+                              text: "Someone rang the bell"
+                    - label:
+                        text_font: montserrat_18
+                        text_color: 0x8A94A3
+                        text: "at"
+                    - label:
+                        id: doorbell_time
+                        text_font: montserrat_40
+                        text_color: 0xE8ECF1
+                        text: "--:--:--"
+                    - label:
+                        id: doorbell_status
+                        width: 100%
+                        text_font: montserrat_18
+                        text_color: 0x8A94A3
+                        text: "connecting..."
+                    - obj:
+                        width: 100%
+                        flex_grow: 1
+                        bg_opa: TRANSP
+                        border_width: 0
+                    - button:
+                        width: 100%
+                        height: 96
+                        on_click:
+                          - script.execute: doorbell_close
+                        widgets:
+                          - label:
+                              align: CENTER
+                              x: -40
+                              text_font: doorbell_icons
+                              text: "\U000F004D"
+                          - label:
+                              align: CENTER
+                              x: 20
+                              text_font: montserrat_28
+                              text: "Back"

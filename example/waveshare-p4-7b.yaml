@@ -1,0 +1,203 @@
+# Complete example for the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024x600).
+# A simple home page with a video button, the doorbell page from doorbell.yaml and a
+# media player for the doorbell audio. Replace the values between < > and put
+# wifi_ssid, wifi_password, api_encryption_key and go2rtc_password in secrets.yaml.
+
+esphome:
+  name: p4-doorbell
+  friendly_name: P4 doorbell
+
+esp32:
+  board: esp32-p4-evboard
+  variant: esp32p4
+  flash_size: 32MB
+  cpu_frequency: 360MHz
+  framework:
+    type: esp-idf
+    advanced:
+      execute_from_psram: true
+      # -O2 instead of -Os: faster LVGL drawing
+      compiler_optimization: PERF
+
+psram:
+  mode: hex
+  speed: 200MHz
+
+logger:
+  hardware_uart: UART0
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_psram: true
+  power_save_mode: none
+
+# Wi-Fi through the ESP32-C6 co-processor on the board
+esp32_hosted:
+  variant: ESP32C6
+  reset_pin: GPIO54
+  cmd_pin: GPIO19
+  clk_pin: GPIO18
+  d0_pin: GPIO14
+  d1_pin: GPIO15
+  d2_pin: GPIO16
+  d3_pin: GPIO17
+  active_high: true
+  use_psram: true
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# The jpeg_stream component from this repository
+external_components:
+  - source: github://martijnbuts/esphome-p4-doorbell@main
+    components: [jpeg_stream]
+
+packages:
+  doorbell:
+    url: https://github.com/martijnbuts/esphome-p4-doorbell
+    ref: main
+    files:
+      - path: example/doorbell.yaml
+        vars:
+          doorbell_sensor: <doorbell-sensor>          # e.g. binary_sensor.doorbell_visitor
+          camera_entity: <camera-entity>              # e.g. camera.doorbell_fluent
+          ha_url: <ha-url>                            # e.g. http://192.168.1.10:8123
+          go2rtc_url: http://<ha-ip>:1984
+          go2rtc_user: p4display
+          go2rtc_password: !secret go2rtc_password    # letters and digits only
+          go2rtc_stream: doorbell_mjpeg
+          go2rtc_audio: doorbell
+          media_player_id: display_media_player
+          display_media_player: <display-media-player> # e.g. media_player.p4_doorbell_media_player
+          time_id: ha_time
+          home_page: home_page
+          close_after: 90s
+
+# ─── Display 1024x600 (MIPI-DSI) + GT911 touch ───────────────────────────────
+esp_ldo:
+  - channel: 3
+    voltage: 2.5V
+
+display:
+  - platform: mipi_dsi
+    model: WAVESHARE-ESP32-P4-WIFI6-TOUCH-LCD-7B
+    id: main_display
+    reset_pin:
+      number: 33
+    update_interval: never
+    auto_clear_enabled: false
+
+output:
+  - platform: ledc
+    id: backlight_output
+    pin: GPIO32
+    inverted: true
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    output: backlight_output
+    name: Display Backlight
+    id: display_backlight
+    restore_mode: ALWAYS_ON
+
+i2c:
+  - id: bus_a
+    sda: GPIO07
+    scl: GPIO08
+    frequency: 400kHz
+
+touchscreen:
+  - platform: gt911
+    id: main_touchscreen
+    i2c_id: bus_a
+    address: 0x5D
+    reset_pin: GPIO23
+    transform:
+      mirror_x: true
+      mirror_y: true
+
+# ─── Audio: ES8311 DAC -> NS4150B amplifier (GPIO53) -> speaker ─────────────
+i2s_audio:
+  - id: board_i2s
+    i2s_mclk_pin: GPIO13
+    i2s_bclk_pin: GPIO12
+    i2s_lrclk_pin: GPIO10
+
+audio_dac:
+  - platform: es8311
+    id: board_dac
+    i2c_id: bus_a
+    address: 0x18
+    bits_per_sample: 16bit
+    sample_rate: 48000
+
+speaker:
+  - platform: i2s_audio
+    id: board_speaker
+    i2s_audio_id: board_i2s
+    i2s_dout_pin: GPIO9
+    dac_type: external
+    audio_dac: board_dac
+    channel: mono
+    sample_rate: 48000
+    bits_per_sample: 16bit
+    buffer_duration: 100ms
+
+switch:
+  - platform: gpio
+    pin: GPIO53
+    id: amplifier
+    name: "Audio Amplifier"
+    restore_mode: ALWAYS_OFF
+
+media_player:
+  - platform: speaker
+    id: display_media_player
+    name: "Media Player"
+    announcement_pipeline:
+      speaker: board_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+    on_announcement:
+      - switch.turn_on: amplifier
+    on_idle:
+      - switch.turn_off: amplifier
+
+# ─── Home page with the video button ─────────────────────────────────────────
+lvgl:
+  displays: main_display
+  touchscreens: main_touchscreen
+  buffer_size: 100%
+  pages:
+    - id: home_page
+      bg_color: 0x0B0F14
+      bg_opa: COVER
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 40
+            text_font: montserrat_40
+            text_color: 0xE8ECF1
+            text: "Home"
+        - button:
+            align: CENTER
+            width: 320
+            height: 120
+            on_click:
+              - script.execute: doorbell_live
+            widgets:
+              - label:
+                  align: CENTER
+                  text_font: montserrat_28
+                  text: "Front door"

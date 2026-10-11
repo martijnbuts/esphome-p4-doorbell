@@ -1,0 +1,28 @@
+# /config/go2rtc.yaml for the go2rtc add-on (https://github.com/AlexxIT/hassio-addons)
+#
+#   doorbell:       the RTSP stream that Home Assistant's built-in go2rtc serves on
+#                   127.0.0.1:18554 (turn on "Preload camera stream" for the camera).
+#                   <stream-name> = <platform>_<unique_id> of the camera entity, see the manual.
+#   doorbell_mjpeg: the same stream as MJPEG (ffmpeg), read by the display:
+#                   http://<ha-ip>:1984/api/stream.mjpeg?src=doorbell_mjpeg
+#   Audio:          http://127.0.0.1:1984/api/stream.aac?src=doorbell, played by Home Assistant
+#                   on the display's media player. Requests from 127.0.0.1 need no password.
+
+api:
+  listen: ":1984"
+  username: p4display
+  password: "<go2rtc-password>"   # letters and digits only (it goes into a URL)
+
+rtsp:
+  listen: "127.0.0.1:8554"        # only for ffmpeg inside go2rtc
+
+exec:
+  allow_paths:
+    - ffmpeg
+
+streams:
+  doorbell: rtsp://127.0.0.1:18554/<stream-name>
+  doorbell_mjpeg: ffmpeg:doorbell#video=mjpeg
+
+log:
+  level: info
