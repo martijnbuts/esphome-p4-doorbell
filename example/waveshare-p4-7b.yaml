@@ -16,6 +16,8 @@ esp32:
     type: esp-idf
     advanced:
       execute_from_psram: true
+      # needed for OTA with 32 MB flash
+      enable_idf_experimental_features: true
       # -O2 instead of -Os: faster LVGL drawing
       compiler_optimization: PERF
 
