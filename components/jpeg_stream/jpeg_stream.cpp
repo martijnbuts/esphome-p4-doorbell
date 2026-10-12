@@ -121,6 +121,8 @@ void JpegStream::start() {
   this->enable_loop();
   if (!this->running_.exchange(true)) {
     this->reset_stats_();
+    this->start_ms_ = millis();
+    this->first_frame_pending_ = true;
     xTaskNotifyGive(this->task_);
   }
 }
@@ -147,6 +149,12 @@ void JpegStream::loop() {
     if (this->stats_shown_ > 0)
       this->gap_us_max_ = std::max(this->gap_us_max_, now_us - this->last_shown_us_);
     this->last_shown_us_ = now_us;
+    this->last_shown_ms_ = millis();
+    if (this->first_frame_pending_) {
+      // Startup time: connection, the source's first (key)frame, receive and decode
+      this->first_frame_pending_ = false;
+      ESP_LOGI(TAG, "First frame %" PRIu32 " ms after start", this->last_shown_ms_ - this->start_ms_);
+    }
     this->stats_shown_++;
     this->shown_ = index;
     this->ready_ = -1;

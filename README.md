@@ -18,6 +18,7 @@ A video button shows the picture without a ring.
 | [`example/doorbell.yaml`](example/doorbell.yaml) | Package with the doorbell page, the scripts, the audio and the fallback to Home Assistant snapshots |
 | [`example/waveshare-p4-7b.yaml`](example/waveshare-p4-7b.yaml) | Complete device configuration for the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B |
 | [`example/go2rtc.yaml`](example/go2rtc.yaml) | Configuration for the go2rtc add-on (MJPEG + AAC from the camera's RTSP stream) |
+| [`example/prewarm.yaml`](example/prewarm.yaml) | Optional: start the stream when a presence sensor (e.g. person detection) turns on, so the picture is there at once when someone rings |
 | [`example/measure.yaml`](example/measure.yaml) | Measurement package: main loop time per component, CPU per task, an A/B switch |
 | [`docs/`](docs) | The manual as Markdown and PDF, and the setup diagram |
 
@@ -53,9 +54,11 @@ On a Waveshare ESP32-P4-WIFI6-Touch-LCD-7B with a Reolink D340P (sub-stream 640�
 | Frames per second | 0.4 | 3.6 | 10 (the camera's frame rate) |
 | Receive + decode per frame | ~2.7 s in the main loop | ~0.25 s, background task | ~7 ms, background task |
 
-With a synthetic 30 fps source the display shows up to 21 fps. The limit is the LVGL refresh of the
-640×480 canvas (~41 ms per frame on the main loop), not the network or the decoder. Details, how to
-measure and ideas to make it faster: **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)**.
+With a synthetic 30 fps source the display showed up to 21 fps. The limit is the LVGL refresh of the
+640×480 canvas, not the network or the decoder: ~41 ms per frame with LVGL `rotation: 180`, 28 ms
+without rotation. With a go2rtc `preload` the first frame is on the screen 0.13 s after the page
+opens (7.7 s without). Details, how to measure and ideas to make it faster:
+**[docs/PERFORMANCE.md](docs/PERFORMANCE.md)**.
 
 ## Requirements
 

@@ -2,8 +2,13 @@
 
 Measured on 12 October 2026. On this board the network and the hardware JPEG decoder are cheap
 (about 7 ms per frame together). **The limit is the LVGL refresh of the 640×480 picture: about
-41 ms per frame on the main loop, so at most about 21 frames per second reach the screen.** The
-camera itself delivers 10 fps, so the doorbell page shows every frame today.
+41 ms per frame on the main loop with LVGL `rotation: 180`, so at most about 21 frames per second
+reach the screen. Without the rotation it is 28 ms (an estimated 35 fps).** The camera itself
+delivers 10 fps, so the doorbell page shows every frame.
+
+**The start-up was slower than the frames:** 7.7 s from opening the page to the first frame,
+because go2rtc started ffmpeg only then. With a go2rtc `preload` it is 0.13 s
+(see [Start-up time](#start-up-time)).
 
 This page lists what was measured, how, and where the time could still be won.
 
@@ -14,7 +19,7 @@ This page lists what was measured, how, and where the time could still be won.
 | Board | Waveshare ESP32-P4-WIFI6-Touch-LCD-7B: ESP32-P4 rev 1.3 at 360 MHz, 32 MB flash, PSRAM hex mode 200 MHz |
 | Wi-Fi | ESP32-C6 co-processor over SDIO (`esp32_hosted`) |
 | Firmware | ESPHome 2026.11.0-dev, ESP-IDF 5.5.5, LVGL 9.5.0, `compiler_optimization: PERF` (-O2), `execute_from_psram: true` |
-| Display | 1024×600 MIPI-DSI; LVGL `rotation: 180` (software rotation, PPA accelerated), `buffer_size: 100%` (one 1.2 MB draw buffer in PSRAM, partial render mode) |
+| Display | 1024×600 MIPI-DSI; LVGL `rotation: 180` (software rotation, PPA accelerated; removed for the later measurements, see below), `buffer_size: 100%` (one 1.2 MB draw buffer in PSRAM, partial render mode) |
 | Page | 640×480 canvas inside a card; also running: touchscreen, voice assistant with micro_wake_word, media player (the doorbell audio plays as an announcement) |
 | Source | go2rtc 1.9.14: Reolink D340P sub-stream (640×480, 10 fps) turned into MJPEG by ffmpeg, 13–22 KB per JPEG. Synthetic load: ffmpeg `testsrc2` 640×480 at 30 or 60 fps, `-q:v 8` (about 17 KB per JPEG) |
 
@@ -36,6 +41,45 @@ out (see *Measurement side effects*).
 main loop puts it on the canvas. *LVGL refresh* is one refresh cycle that rendered something
 (`LV_EVENT_REFR_START` to `LV_EVENT_REFR_READY`: layout, render and flush); *flush* is the time
 spent in the flush callback (rotation plus the copy into the display frame buffer).
+
+### Without the 180° rotation
+
+The display was mounted upside down and LVGL turned every refresh back with `rotation: 180`
+(software rotation, PPA accelerated). After removing it (and turning the display around), with the
+camera at 10 fps, no `clip_corner`, averages over three 30-second windows:
+
+| | With `rotation: 180` | Without rotation |
+| --- | --- | --- |
+| LVGL refresh | 41.3 ms | 28.0 ms |
+| of which flush | 17.4 ms | 4.6 ms |
+| Hand-off | 2.0 ms | 0.3–0.4 ms |
+| Estimated ceiling (1000 ms / refresh) | ~21 fps (measured 21.5) | ~35 fps (not measured yet) |
+
+The rotation cost 13 ms per refresh: the PPA rotation into a separate 1.2 MB buffer before the copy
+into the display frame buffer. Without rotation LVGL also does not allocate that buffer. Touch
+needs no change: ESPHome only turns the touch coordinates when LVGL has a rotation.
+
+### Start-up time
+
+The time from opening the page to the first frame on the screen. The display logs it as
+`First frame ... ms after start` (`jpeg_stream`, INFO) and the doorbell package as
+`First frame ... ms after opening the page`.
+
+| go2rtc | First frame |
+| --- | --- |
+| On demand (default): ffmpeg starts when the display connects | 7.7 s |
+| `preload: doorbell_mjpeg: video` in `go2rtc.yaml` | 0.13 s |
+| Preload, and the stream already started by the presence sensor (`example/prewarm.yaml`) | at once (last frame 0.11 s old) |
+
+Most of the 7.7 s is ffmpeg: starting, probing the RTSP stream and waiting for the next key frame of
+the camera. Home Assistant's own go2rtc already had the camera stream loaded. With `preload`, go2rtc
+keeps the ffmpeg conversion running all the time; on this Home Assistant host that cost about 2 % CPU
+(add-on statistics) and 25 MB of memory.
+
+`example/prewarm.yaml` starts the stream on the display as soon as a presence sensor turns on. On
+this doorbell the person detection came only 0.2–3 s (median about 1 s) before the ring
+(21 rings, 4–12 October 2026), so on its own it cannot hide 7.7 s; with `preload` it saves the last
+0.13 s.
 
 ### CPU load per task
 
@@ -83,7 +127,7 @@ Not tried yet, roughly in order of expected gain.
 | --- | --- |
 | Draw the video rectangle outside LVGL: rotate and copy the decoded frame with the PPA straight into the display frame buffer, and let LVGL only draw the rest of the page | Removes the ~24 ms LVGL render per frame; the PPA copy would replace the flush |
 | Use the LVGL PPA draw unit (`LV_USE_PPA`) for image blits | ESPHome turns `LV_USE_PPA` off ("disable use of PPA for fills until upstream bugs fixed"); enabling it only for image blits could take the render off the CPU |
-| Avoid the 180° rotation | Saves the rotation step in every flush, if the panel can mirror in hardware or the board can be mounted the other way round |
+| ~~Avoid the 180° rotation~~ | Done: refresh 41 → 28 ms, see *Without the 180° rotation* |
 | Double draw buffers or LVGL direct mode | Lets rendering of the next area overlap with the flush of the previous one |
 | Keep parents of the canvas plain | No `clip_corner`, opacity, transforms or shadows on the card: each makes LVGL take a slower blend path (`clip_corner` alone cost 10 ms) |
 

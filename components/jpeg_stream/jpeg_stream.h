@@ -41,6 +41,8 @@ class JpegStream : public Component {
   void start();
   void stop();
   bool is_running() const { return this->running_; }
+  /// millis() of the last frame put on the canvas (0: none since boot).
+  uint32_t get_last_shown() const { return this->last_shown_ms_; }
 
   /// Number of frames shown since boot.
   uint32_t get_frame_count() const { return this->frame_count_; }
@@ -118,6 +120,9 @@ class JpegStream : public Component {
   std::atomic<uint32_t> dropped_count_{0};
   uint32_t last_present_{0};
   uint32_t frame_count_{0};
+  uint32_t last_shown_ms_{0};
+  uint32_t start_ms_{0};             // millis() of the last start() that started the stream
+  bool first_frame_pending_{false};  // the first frame since that start() has not been shown yet
   uint16_t canvas_width_{0};
   uint16_t canvas_height_{0};
 

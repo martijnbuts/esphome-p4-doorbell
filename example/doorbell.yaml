@@ -12,6 +12,8 @@
 #     password) as an announcement on this display's media player. Music pauses meanwhile.
 #   - The page closes with the Back button or by itself after ${close_after}.
 #   - Every 5 s the log (INFO) shows frames per 5 s, decode time and skipped frames.
+#     When the page opens, the log shows how long the first frame took ("First frame ... ms
+#     after opening the page"), or that the stream was already running (see prewarm.yaml).
 #
 # Include it with these vars (all required):
 #   doorbell_sensor:   binary_sensor that turns on when someone rings (Home Assistant)
@@ -59,6 +61,12 @@ jpeg_stream:
           id(doorbell_last_frame) = millis();
           if (lv_obj_has_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN))
             lv_obj_remove_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN);
+          // the wait as you see it: from opening the page to the first frame
+          if (id(doorbell_open_ms) != 0) {
+            ESP_LOGI("doorbell", "First frame %u ms after opening the page",
+                     (unsigned) (millis() - id(doorbell_open_ms)));
+            id(doorbell_open_ms) = 0;
+          }
     # 3 errors in a row with go2rtc: carry on with snapshots through Home Assistant
     on_error:
       - lambda: 'id(doorbell_errors)++;'
@@ -90,6 +98,9 @@ globals:
   - id: doorbell_via_ha        # true = snapshots through Home Assistant instead of go2rtc
     type: bool
     initial_value: "false"
+  - id: doorbell_open_ms       # millis() when the page opened without a picture (0: not waiting)
+    type: uint32_t
+    initial_value: "0"
 
 script:
   # Someone rang the doorbell
@@ -138,15 +149,43 @@ script:
             not:
               lvgl.page.is_showing: doorbell_page
           then:
-            # no old picture until the first new one has arrived
-            - lvgl.widget.hide: doorbell_video
-            - lvgl.label.update:
-                id: doorbell_status
-                text: "connecting..."
+            - lambda: |-
+                // Already running (prewarm.yaml) with a frame from less than 1 s ago: show it at once.
+                // Otherwise no old picture until the first new one has arrived.
+                const uint32_t last = id(doorbell_stream).get_last_shown();
+                id(doorbell_frames) = 0;
+                if (id(doorbell_stream).is_running() && last != 0 && millis() - last < 1000) {
+                  ESP_LOGI("doorbell", "Stream was already running: picture at once (last frame %u ms ago)",
+                           (unsigned) (millis() - last));
+                  id(doorbell_open_ms) = 0;
+                  lv_label_set_text(id(doorbell_status), "Live");
+                } else {
+                  lv_obj_add_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN);
+                  lv_label_set_text(id(doorbell_status), "connecting...");
+                  id(doorbell_open_ms) = millis();
+                }
             - lvgl.page.show:
                 id: doorbell_page
                 animation: MOVE_LEFT
                 time: 250ms
+            - script.execute: doorbell_start_stream
+            # doorbell audio as an announcement on this display (played by Home Assistant)
+            - homeassistant.action:
+                action: media_player.play_media
+                data:
+                  entity_id: ${display_media_player}
+                  media_content_id: "http://127.0.0.1:1984/api/stream.aac?src=${go2rtc_audio}"
+                  media_content_type: music
+                  announce: "true"
+      - script.execute: doorbell_auto_close
+
+  # Start the stream; if it already runs (prewarm.yaml), it just carries on
+  - id: doorbell_start_stream
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(doorbell_stream).is_running();'
+          then:
             - globals.set:
                 id: doorbell_errors
                 value: "0"
@@ -162,15 +201,6 @@ script:
                   if (pos != std::string::npos)
                     url.insert(pos + 3, std::string("${go2rtc_user}:${go2rtc_password}@"));
                   return url + "/api/stream.mjpeg?src=${go2rtc_stream}";
-            # doorbell audio as an announcement on this display (played by Home Assistant)
-            - homeassistant.action:
-                action: media_player.play_media
-                data:
-                  entity_id: ${display_media_player}
-                  media_content_id: "http://127.0.0.1:1984/api/stream.aac?src=${go2rtc_audio}"
-                  media_content_type: music
-                  announce: "true"
-      - script.execute: doorbell_auto_close
 
   - id: doorbell_auto_close
     mode: restart
@@ -181,6 +211,9 @@ script:
   - id: doorbell_close
     then:
       - script.stop: doorbell_auto_close
+      - globals.set:
+          id: doorbell_open_ms
+          value: "0"
       - jpeg_stream.stop: doorbell_stream
       - if:
           condition:

@@ -83,6 +83,12 @@ packages:
           time_id: ha_time
           home_page: home_page
           close_after: 90s
+      # Optional: start the stream when someone is at the door, so the picture is there at once
+      # when they ring. Remove these lines if the doorbell has no person (or motion) sensor.
+      - path: example/prewarm.yaml
+        vars:
+          presence_sensor: <presence-sensor>          # e.g. binary_sensor.doorbell_person
+          prewarm_hold: 30s
 
 # ─── Display 1024x600 (MIPI-DSI) + GT911 touch ───────────────────────────────
 esp_ldo:

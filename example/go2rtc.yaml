@@ -7,6 +7,10 @@
 #                   http://<ha-ip>:1984/api/stream.mjpeg?src=doorbell_mjpeg
 #   Audio:          http://127.0.0.1:1984/api/stream.aac?src=doorbell, played by Home Assistant
 #                   on the display's media player. Requests from 127.0.0.1 need no password.
+#   preload:        keeps the MJPEG conversion running, so the first frame is on the display in
+#                   about 0.1 s instead of about 8 s (ffmpeg start + waiting for a key frame).
+#                   Costs about 2 % CPU and 25 MB on a typical Home Assistant host. Leave it out
+#                   if that matters more than the start-up time.
 
 api:
   listen: ":1984"
@@ -23,6 +27,9 @@ exec:
 streams:
   doorbell: rtsp://127.0.0.1:18554/<stream-name>
   doorbell_mjpeg: ffmpeg:doorbell#video=mjpeg
+
+preload:
+  doorbell_mjpeg: video
 
 log:
   level: info

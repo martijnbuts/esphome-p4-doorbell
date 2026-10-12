@@ -1,0 +1,60 @@
+# Optional: start the doorbell stream before anyone rings.
+# This package starts the stream (invisibly, the page stays closed) as soon as a presence sensor
+# turns on, for example the person detection of the doorbell. If someone then rings, the picture
+# is there at once. If nobody rings, the stream stops ${prewarm_hold} after the sensor turned off.
+#
+# Do the go2rtc preload first (example/go2rtc.yaml): it brings the first frame from about 8 s down
+# to about 0.1 s. A person sensor usually fires only 1-3 s before the ring, so this package alone
+# cannot hide an 8 s start; on top of the preload it removes the last 0.1 s.
+#
+# A hidden canvas costs LVGL nothing; receiving and decoding cost about 3 % CPU and the Wi-Fi
+# about 6 % (docs/PERFORMANCE.md). Needs doorbell.yaml.
+#
+# Include it next to doorbell.yaml with these vars:
+#   presence_sensor:  binary_sensor in Home Assistant that turns on before someone rings,
+#                     e.g. binary_sensor.front_door_person (Reolink person detection)
+#   prewarm_hold:     how long to keep the stream after the sensor turned off, e.g. 30s
+
+binary_sensor:
+  - platform: homeassistant
+    id: doorbell_presence
+    entity_id: ${presence_sensor}
+    internal: true
+    on_press:
+      - script.execute: doorbell_prewarm
+    on_release:
+      - script.execute: doorbell_prewarm_stop
+
+script:
+  # Someone at the door: start the stream (the page stays closed)
+  - id: doorbell_prewarm
+    then:
+      - script.stop: doorbell_prewarm_stop
+      - if:
+          condition:
+            and:
+              - not:
+                  lvgl.page.is_showing: doorbell_page
+              - lambda: 'return !id(doorbell_stream).is_running();'
+          then:
+            - logger.log:
+                tag: doorbell
+                format: "Someone at the door: starting the stream"
+            - script.execute: doorbell_start_stream
+
+  # Nobody rang: stop again
+  - id: doorbell_prewarm_stop
+    mode: restart
+    then:
+      - delay: ${prewarm_hold}
+      - if:
+          condition:
+            and:
+              - not:
+                  lvgl.page.is_showing: doorbell_page
+              - lambda: 'return id(doorbell_stream).is_running();'
+          then:
+            - logger.log:
+                tag: doorbell
+                format: "Nobody rang: stream stopped"
+            - jpeg_stream.stop: doorbell_stream
