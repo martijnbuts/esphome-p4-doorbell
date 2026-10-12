@@ -1,6 +1,6 @@
 # Live Reolink doorbell video and audio on an ESP32-P4 display
 
-11 October 2026 · Martijn Buts
+11 October 2026, updated 12 October 2026 · Martijn Buts
 
 ## What you build
 
@@ -129,7 +129,7 @@ A user name and password in the URL are sent as HTTP Basic authentication. A fra
 | `min_interval` | 0ms | Minimum time between two frames |
 | `on_frame`, `on_error` | none | Automations after each frame and after each error |
 
-Actions: `jpeg_stream.start` (with an optional `url`), `jpeg_stream.stop` and `jpeg_stream.set_url`. Condition: `jpeg_stream.is_running`. In a lambda, `get_last_frame_time()` gives the decode time of the last frame and `get_dropped_count()` the skipped frames.
+Actions: `jpeg_stream.start` (with an optional `url`), `jpeg_stream.stop` and `jpeg_stream.set_url`. Condition: `jpeg_stream.is_running`. In a lambda, `get_last_frame_time()` gives the decode time of the last frame and `get_dropped_count()` the skipped frames. The option stats\_interval (default 0s, off) logs where the time goes; see Performance.
 
 ## Step 4: Add the doorbell page
 
@@ -208,6 +208,47 @@ This step lets Home Assistant play the doorbell audio on the display. When the p
 The audio is 1–2 s behind the picture, because ffmpeg and the media player buffer it.
 
 Control: open the page and look at the media player in Home Assistant. It should say *Playing* within a second, and you hear the street. After **Back** it goes to *Idle*.
+
+## Performance
+
+On the tested display a frame takes about 3.5 ms to receive and 3.5 ms to decode. The limit is the LVGL refresh of the 640×480 picture: about 41 ms per frame on the main loop, so at most about 21 fps reach the screen. The camera delivers 10 fps, so every frame is shown.
+
+Measured on 12 October 2026 on the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (360 MHz, LVGL `rotation: 180`, `buffer_size: 100%`) with ESPHome 2026.11.0-dev. The synthetic source is an ffmpeg test picture of 640×480 from go2rtc.
+
+| Input | Shown | Skipped | Decode | LVGL refresh (of which flush) |
+| --- | --- | --- | --- | --- |
+| Camera, 10 fps, with `clip_corner` | 10.0 fps | 0 % | 3.5 ms | 51.5 ms (17.4 ms) |
+| Camera, 10 fps | 10.0 fps | 0 % | 3.5 ms | 41.3 ms (17.4 ms) |
+| Synthetic, 30 fps, with `clip_corner` | 17.2 fps | 43 % | 4.2 ms | 57 ms (18.7 ms) |
+| Synthetic, 30 fps | 21.5 fps | 29 % | 4.0 ms | 45.7 ms (19.5 ms) |
+| Synthetic, 60 fps, with `clip_corner` | 16.4 fps | 73 % | 6.3–8.0 ms | 60 ms (19.5 ms) |
+
+`clip_corner` (rounded corners) on the card around the picture cost about 10 ms per frame, so the package no longer uses it. *Flush* is the 180° rotation plus the copy into the display; the rest of the refresh is LVGL rendering the picture in software.
+
+To measure on your own display:
+
+1. Add `stats_interval: 10s` to `jpeg_stream`. While the page is open the log shows every 10 s:
+
+   ```
+   Stats over 10.0 s: 10.0 fps shown (100 shown, 100 received, 0 skipped, 0 errors)
+     JPEG size: avg 21.7 KB, 217 KB/s
+     Receive:   avg 3.4 ms, max 10.0 ms
+     Decode:    avg 3.6 ms, max 6.0 ms
+     Hand-off:  avg 3.1 ms, max 30.4 ms (task -> canvas in the main loop)
+     Frame gap: max 155.4 ms
+     LVGL refresh: 102 x, avg 51.6 ms, max 58.2 ms (layout + render + flush)
+     LVGL flush:   avg 17.4 ms per refresh (flush_cb: copy to the display)
+   ```
+2. For the time per component in the main loop and the CPU load per task, add the package `example/measure.yaml` from the repository. Remove it after measuring.
+3. To find the ceiling, let go2rtc send a test picture instead of the camera, and restart the add-on:
+
+   ```yaml
+   streams:
+     doorbell_mjpeg: "exec:ffmpeg -hide_banner -v error -re -f lavfi -i testsrc2=size=640x480:rate=30 -c:v mjpeg -q:v 8 -f mjpeg -"
+   ```
+4. Leave out the 10-second windows in which `runtime_stats` prints its report: that burst stalls the main loop for about 0.5 s.
+
+The ideas that could make it faster all target the LVGL refresh: draw the video outside LVGL with the PPA, use the LVGL PPA draw unit for image blits, avoid the 180° rotation, or use double draw buffers. [docs/PERFORMANCE.md](PERFORMANCE.md) has all measurements, the CPU load per task and these ideas in detail.
 
 ## Testing
 
