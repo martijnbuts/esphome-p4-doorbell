@@ -14,6 +14,9 @@ esp32:
   cpu_frequency: 360MHz
   framework:
     type: esp-idf
+    # Optional, faster drawing (docs/PERFORMANCE.md): with ESP-IDF 6.0 LVGL uses the PPA. Add
+    # `version: 6.0.1` here and, under esphome:, `build_flags: [-DLV_USE_PPA_IMG=1]` so that LVGL
+    # also draws the doorbell picture with the PPA (LVGL refresh 28 -> 21 ms per frame).
     advanced:
       execute_from_psram: true
       # needed for OTA with 32 MB flash

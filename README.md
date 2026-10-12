@@ -56,7 +56,7 @@ On a Waveshare ESP32-P4-WIFI6-Touch-LCD-7B with a Reolink D340P (sub-stream 640Ã
 
 With a synthetic 30 fps source the display showed up to 21 fps. The limit is the LVGL refresh of the
 640Ã—480 canvas, not the network or the decoder: ~41 ms per frame with LVGL `rotation: 180`, 28 ms
-without rotation. With a go2rtc `preload` the first frame is on the screen 0.13 s after the page
+without rotation, 21 ms with ESP-IDF 6.0 and LVGL drawing the picture with the PPA. With a go2rtc `preload` the first frame is on the screen 0.13 s after the page
 opens (7.7 s without). Details, how to measure and ideas to make it faster:
 **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)**.
 

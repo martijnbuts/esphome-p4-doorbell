@@ -22,7 +22,7 @@ You need a Reolink camera in Home Assistant, the go2rtc add-on and an ESP32-P4 d
 | Home Assistant | HA OS or Supervised (add-ons); tested on 2026.10 | Runs the go2rtc add-on and converts the audio for the display |
 | go2rtc add-on | From the AlexxIT add-on repository; tested on 1.9.14 | Turns the RTSP stream into MJPEG and AAC, behind a password |
 | ESP32-P4 board with display | PSRAM (the frame buffers take about 1.5 MB), Wi-Fi, LVGL | The P4 has a hardware JPEG decoder: 5–10 ms per frame |
-| ESPHome | 2026.11.0-dev with ESP-IDF 5.5 (tested) | The component uses the LVGL 9 canvas and the ESP-IDF JPEG driver |
+| ESPHome | 2026.11.0-dev with ESP-IDF 5.5 or 6.0 (both tested) | The component uses the LVGL 9 canvas and the ESP-IDF JPEG driver |
 | Media player on the display | An ESPHome `speaker` media player with an announcement pipeline | The doorbell audio plays as an announcement and pauses music |
 | Router | Firewall rules between VLANs (the example is MikroTik RouterOS 7) | The display sits in an IoT VLAN and may only reach go2rtc |
 
@@ -56,9 +56,13 @@ This step makes an MJPEG stream of the doorbell that the display can read. The g
    streams:
      doorbell: rtsp://127.0.0.1:18554/<stream-name>
      doorbell_mjpeg: ffmpeg:doorbell#video=mjpeg
+   preload:
+     doorbell_mjpeg: video      # keep the MJPEG conversion running: first frame in 0.1 s instead of 8 s
    log:
      level: info
    ```
+
+   The `preload` keeps ffmpeg running all the time. Without it, ffmpeg only starts when the display opens the page, and the first frame takes about 8 s (ffmpeg start and the next key frame of the camera). It cost about 2 % CPU and 25 MB of memory on the tested Home Assistant host; leave it out if that matters more to you.
 5. Restart the add-on and open its *Log* tab. You should see `[api] listen addr=:1984` and no errors.
 
 Control: from a computer in your LAN, run
@@ -129,7 +133,7 @@ A user name and password in the URL are sent as HTTP Basic authentication. A fra
 | `min_interval` | 0ms | Minimum time between two frames |
 | `on_frame`, `on_error` | none | Automations after each frame and after each error |
 
-Actions: `jpeg_stream.start` (with an optional `url`), `jpeg_stream.stop` and `jpeg_stream.set_url`. Condition: `jpeg_stream.is_running`. In a lambda, `get_last_frame_time()` gives the decode time of the last frame and `get_dropped_count()` the skipped frames. The option stats\_interval (default 0s, off) logs where the time goes; see Performance.
+Actions: `jpeg_stream.start` (with an optional `url`), `jpeg_stream.stop` and `jpeg_stream.set_url`. Condition: `jpeg_stream.is_running`. In a lambda, `get_last_frame_time()` gives the decode time of the last frame and `get_dropped_count()` the skipped frames, and get\_last\_shown() the millis() of the last frame on the canvas. When a stream starts, the log shows First frame ... ms after start. The option stats\_interval (default 0s, off) logs where the time goes; see Performance.
 
 ## Step 4: Add the doorbell page
 
@@ -183,6 +187,8 @@ Do you have the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B? Then start from the compl
 
 The page uses two LVGL frame buffers of 640×480 in PSRAM (about 1.2 MB) and a JPEG buffer of 256 KB. They are made the first time the page opens and stay for the next time.
 
+Optional: does your doorbell have a person (or motion) sensor in Home Assistant? Then add `example/prewarm.yaml` as a second file of the package, with the vars `presence_sensor: <presence-sensor>` and `prewarm_hold: 30s` (the complete example shows how). It starts the stream invisibly when the sensor turns on, so the picture is there at once when someone rings, and stops it 30 s after the sensor turned off. Do the go2rtc `preload` from Step 1 first: a person sensor usually fires only 1–3 s before the ring.
+
 Control: press **Open doorbell camera** in Home Assistant and open the logs of the device. Every 5 s you should see a line like `go2rtc: 50 frames in 5 s, last frame 6 ms, 0 skipped`.
 
 ## Step 5: Turn on the doorbell audio
@@ -211,19 +217,25 @@ Control: open the page and look at the media player in Home Assistant. It should
 
 ## Performance
 
-On the tested display a frame takes about 3.5 ms to receive and 3.5 ms to decode. The limit is the LVGL refresh of the 640×480 picture: about 41 ms per frame on the main loop, so at most about 21 fps reach the screen. The camera delivers 10 fps, so every frame is shown.
+On the tested display a frame takes about 2–3.5 ms to receive and 3.5 ms to decode. The limit is the LVGL refresh of the 640×480 picture on the main loop. The camera delivers 10 fps, so every frame is shown in all set-ups below.
 
-Measured on 12 October 2026 on the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (360 MHz, LVGL `rotation: 180`, `buffer_size: 100%`) with ESPHome 2026.11.0-dev. The synthetic source is an ffmpeg test picture of 640×480 from go2rtc.
+Measured on 12 October 2026 on the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (360 MHz, `buffer_size: 100%`) with ESPHome 2026.11.0-dev. The synthetic source is an ffmpeg test picture of 640×480 from go2rtc.
 
-| Input | Shown | Skipped | Decode | LVGL refresh (of which flush) |
-| --- | --- | --- | --- | --- |
-| Camera, 10 fps, with `clip_corner` | 10.0 fps | 0 % | 3.5 ms | 51.5 ms (17.4 ms) |
-| Camera, 10 fps | 10.0 fps | 0 % | 3.5 ms | 41.3 ms (17.4 ms) |
-| Synthetic, 30 fps, with `clip_corner` | 17.2 fps | 43 % | 4.2 ms | 57 ms (18.7 ms) |
-| Synthetic, 30 fps | 21.5 fps | 29 % | 4.0 ms | 45.7 ms (19.5 ms) |
-| Synthetic, 60 fps, with `clip_corner` | 16.4 fps | 73 % | 6.3–8.0 ms | 60 ms (19.5 ms) |
+| Set-up | Input | Shown | LVGL refresh (of which flush) |
+| --- | --- | --- | --- |
+| `rotation: 180`, with `clip_corner` | Camera, 10 fps | 10.0 fps | 51.5 ms (17.4 ms) |
+| `rotation: 180` | Camera, 10 fps | 10.0 fps | 41.3 ms (17.4 ms) |
+| `rotation: 180` | Synthetic, 30 fps | 21.5 fps (29 % skipped) | 45.7 ms (19.5 ms) |
+| No rotation | Camera, 10 fps | 10.0 fps | 28.0 ms (4.6 ms) |
+| No rotation, ESP-IDF 6.0, `LV_USE_PPA_IMG` | Camera, 10 fps | 10.0 fps | 20.8 ms (4.2 ms) |
 
-`clip_corner` (rounded corners) on the card around the picture cost about 10 ms per frame, so the package no longer uses it. *Flush* is the 180° rotation plus the copy into the display; the rest of the refresh is LVGL rendering the picture in software.
+What made the difference:
+
+- **No `clip_corner`** (rounded corners) on the card around the picture: about 10 ms per frame. The package no longer uses it.
+- **No LVGL rotation**: `rotation: 180` turned every refresh with the PPA into an extra 1.2 MB buffer: 13 ms per frame. If your display hangs upside down, turn the display around instead and remove the rotation; touch follows by itself.
+- **ESP-IDF 6.0 and LVGL drawing the picture with the PPA**: 8 ms per frame. With ESP-IDF 6.0 (`esp32: framework: version: 6.0.1`) ESPHome turns on the LVGL PPA draw unit for fills; drawing images with it is a separate LVGL option. Add it as a build flag: `esphome: build_flags: [-DLV_USE_PPA_IMG=1]`.
+
+The start-up is set by go2rtc, not by the display: 7.7 s from opening the page to the first frame without `preload`, 0.13 s with it.
 
 To measure on your own display:
 
@@ -239,16 +251,17 @@ To measure on your own display:
      LVGL refresh: 102 x, avg 51.6 ms, max 58.2 ms (layout + render + flush)
      LVGL flush:   avg 17.4 ms per refresh (flush_cb: copy to the display)
    ```
-2. For the time per component in the main loop and the CPU load per task, add the package `example/measure.yaml` from the repository. Remove it after measuring.
-3. To find the ceiling, let go2rtc send a test picture instead of the camera, and restart the add-on:
+2. The start-up time is in the log when the page opens: `First frame ... ms after opening the page`.
+3. For the time per component in the main loop and the CPU load per task, add the package `example/measure.yaml` from the repository. Remove it after measuring.
+4. To find the ceiling, let go2rtc send a test picture instead of the camera, and restart the add-on:
 
    ```yaml
    streams:
      doorbell_mjpeg: "exec:ffmpeg -hide_banner -v error -re -f lavfi -i testsrc2=size=640x480:rate=30 -c:v mjpeg -q:v 8 -f mjpeg -"
    ```
-4. Leave out the 10-second windows in which `runtime_stats` prints its report: that burst stalls the main loop for about 0.5 s.
+5. Leave out the 10-second windows in which `runtime_stats` prints its report: that burst stalls the main loop for about 0.5 s.
 
-The ideas that could make it faster all target the LVGL refresh: draw the video outside LVGL with the PPA, use the LVGL PPA draw unit for image blits, avoid the 180° rotation, or use double draw buffers. [docs/PERFORMANCE.md](PERFORMANCE.md) has all measurements, the CPU load per task and these ideas in detail.
+[docs/PERFORMANCE.md](https://github.com/martijnbuts/esphome-p4-doorbell/blob/main/docs/PERFORMANCE.md) has all measurements, the CPU load per task and the ideas that are left: drawing the video outside LVGL with the PPA, and double draw buffers.
 
 ## Testing
 
@@ -259,7 +272,7 @@ Test each part on its own, from the network the display is in, before you rely o
 | go2rtc gives a picture | `curl -u p4display:<go2rtc-password> -o frame.jpg "http://<ha-ip>:1984/api/frame.jpeg?src=doorbell_mjpeg"` | `frame.jpg` shows the doorbell |
 | go2rtc is closed without a password | The same command without `-u` | `Unauthorized` |
 | Only the display reaches port 1984 | The `curl` command from another device in the IoT VLAN | Time-out |
-| Picture on the display | Press **Open doorbell camera** in Home Assistant | The page opens within 2 s; the log shows about 50 frames per 5 s |
+| Picture on the display | Press **Open doorbell camera** in Home Assistant | The picture is there within 0.5 s (log: First frame ... ms after opening the page); the log shows about 50 frames per 5 s |
 | Low delay | Compare the clock in the camera picture with a clock next to you | Less than 1 s behind |
 | Audio | Open the page and watch the media player in Home Assistant | *Playing* within 1 s; you hear the street |
 | Audio stops | Press **Back** | Media player *Idle*; no consumers left in go2rtc (`/api/streams`) |
@@ -281,7 +294,7 @@ These problems came up while building this.
 | `HTTP status 401` in the display log | Wrong user name or password, or a password with characters such as `@` or `:` | Use the same values as in `go2rtc.yaml`, letters and digits only |
 | Display cannot connect to Home Assistant on port 8123 | The IoT VLAN may not reach Home Assistant | Use the URL the display already uses (for example the HTTPS URL on 443), or open the port for the display only |
 | Audio keeps playing after **Stop** in Home Assistant | The Stop button does not stop an announcement on an ESPHome media player | Close the page on the display; the package stops it with `announcement: true` |
-| The first frame takes several seconds | ffmpeg waits for a key frame of the camera | Keep `timeout: 10s`; a shorter key frame interval in the camera helps |
+| The first frame takes several seconds | ffmpeg waits for a key frame of the camera | Keep `timeout: 10s`; add preload: doorbell\_mjpeg: video to go2rtc.yaml (Step 1) for a first frame in about 0.1 s |
 | `OTA with 32MB flash requires 'enable_idf_experimental_features'` | ESPHome rule for boards with 32 MB flash | Add `enable_idf_experimental_features: true` under `esp32: framework: advanced:` |
 | go2rtc web page asks for a login | The API password also protects the web page | Log in with the user name and password from `go2rtc.yaml` |
 

@@ -3,8 +3,9 @@
 Measured on 12 October 2026. On this board the network and the hardware JPEG decoder are cheap
 (about 7 ms per frame together). **The limit is the LVGL refresh of the 640×480 picture: about
 41 ms per frame on the main loop with LVGL `rotation: 180`, so at most about 21 frames per second
-reach the screen. Without the rotation it is 28 ms (an estimated 35 fps).** The camera itself
-delivers 10 fps, so the doorbell page shows every frame.
+reach the screen. Without the rotation it is 28 ms, and with ESP-IDF 6.0 and LVGL drawing the
+picture with the PPA 21 ms (an estimated 48 fps).** The camera itself delivers 10 fps, so the
+doorbell page shows every frame.
 
 **The start-up was slower than the frames:** 7.7 s from opening the page to the first frame,
 because go2rtc started ffmpeg only then. With a go2rtc `preload` it is 0.13 s
@@ -58,6 +59,43 @@ camera at 10 fps, no `clip_corner`, averages over three 30-second windows:
 The rotation cost 13 ms per refresh: the PPA rotation into a separate 1.2 MB buffer before the copy
 into the display frame buffer. Without rotation LVGL also does not allocate that buffer. Touch
 needs no change: ESPHome only turns the touch coordinates when LVGL has a rotation.
+
+### ESP-IDF 6.0 and LVGL drawing with the PPA
+
+ESPHome turns the LVGL PPA draw unit (`LV_USE_PPA`) on only with ESP-IDF 6.0 or newer, since LVGL
+9.6 ([esphome#20257](https://github.com/esphome/esphome/pull/20257)): the LVGL PPA driver needs a
+cache function that IDF 5.x lacks. That unit does fills by default; drawing images (such as the
+canvas with the doorbell picture) is a separate LVGL option, `LV_USE_PPA_IMG`, that is off by
+default. ESPHome keeps a `-D` build flag that sets an LVGL option:
+
+```yaml
+esphome:
+  build_flags:
+    - -DLV_USE_PPA_IMG=1   # LVGL draws simple images (unscaled, unrotated, opaque) with the PPA
+
+esp32:
+  framework:
+    type: esp-idf
+    version: 6.0.1
+```
+
+Same display, no rotation, camera at 10 fps, two 30-second windows each:
+
+| Firmware | LVGL refresh | of which flush | Estimated ceiling |
+| --- | --- | --- | --- |
+| ESP-IDF 5.5.5, LVGL 9.5 (PPA off) | 28.0 ms | 4.6 ms | ~35 fps |
+| ESP-IDF 6.0.1, LVGL 9.6, `LV_USE_PPA` (fills) | 28.6 ms | 4.6 ms | ~35 fps |
+| ESP-IDF 6.0.1, LVGL 9.6, `LV_USE_PPA` + `LV_USE_PPA_IMG` | 20.8 ms | 4.2 ms | ~48 fps |
+
+Fills on the PPA change nothing for this page; drawing the picture with the PPA saves about 8 ms
+per frame. Receive (1.7 ms) and decode (3.5 ms) did not change. The rest of the page and the home
+page looked right in screenshots. In the windows with IDF 6.0 the longest gap between two frames
+was 230–275 ms (150–165 ms before); with 0 skipped frames this is probably the camera or Wi-Fi, but
+it has not been looked into yet.
+
+With LVGL 9.6 the compiler warns that `lv_obj_add_flag()`, `lv_obj_remove_flag()` and
+`lv_obj_has_flag()` are deprecated (`lv_obj_set_hidden()` and so on). The doorbell package still
+uses the old calls, so that it also builds with LVGL 9.5.
 
 ### Start-up time
 
@@ -125,8 +163,8 @@ Not tried yet, roughly in order of expected gain.
 
 | Idea | Why it could help |
 | --- | --- |
-| Draw the video rectangle outside LVGL: rotate and copy the decoded frame with the PPA straight into the display frame buffer, and let LVGL only draw the rest of the page | Removes the ~24 ms LVGL render per frame; the PPA copy would replace the flush |
-| Use the LVGL PPA draw unit (`LV_USE_PPA`) for image blits | ESPHome turns `LV_USE_PPA` off ("disable use of PPA for fills until upstream bugs fixed"); enabling it only for image blits could take the render off the CPU |
+| Draw the video rectangle outside LVGL: rotate and copy the decoded frame with the PPA straight into the display frame buffer, and let LVGL only draw the rest of the page | Removes the rest of the LVGL render per frame (about 16 ms with the PPA image path, 24 ms without); the PPA copy would replace the flush |
+| ~~Use the LVGL PPA draw unit for image blits~~ | Done with ESP-IDF 6.0 and `LV_USE_PPA_IMG`: refresh 28 → 21 ms, see *ESP-IDF 6.0 and LVGL drawing with the PPA* |
 | ~~Avoid the 180° rotation~~ | Done: refresh 41 → 28 ms, see *Without the 180° rotation* |
 | Double draw buffers or LVGL direct mode | Lets rendering of the next area overlap with the flush of the previous one |
 | Keep parents of the canvas plain | No `clip_corner`, opacity, transforms or shadows on the card: each makes LVGL take a slower blend path (`clip_corner` alone cost 10 ms) |
