@@ -4,8 +4,8 @@ Measured on 12 October 2026. On this board the network and the hardware JPEG dec
 (about 7 ms per frame together). **The limit is the LVGL refresh of the 640×480 picture: about
 41 ms per frame on the main loop with LVGL `rotation: 180`, so at most about 21 frames per second
 reach the screen. Without the rotation it is 28 ms, and with ESP-IDF 6.0 and LVGL drawing the
-picture with the PPA 21 ms (an estimated 48 fps).** The camera itself delivers 10 fps, so the
-doorbell page shows every frame.
+picture with the PPA 21 ms: measured, a 30 fps source is shown completely and a 60 fps source at
+39 fps.** The camera itself delivers 10 fps, so the doorbell page shows every frame.
 
 **The start-up was slower than the frames:** 7.7 s from opening the page to the first frame,
 because go2rtc started ffmpeg only then. With a go2rtc `preload` it is 0.13 s
@@ -81,17 +81,37 @@ esp32:
 
 Same display, no rotation, camera at 10 fps, two 30-second windows each:
 
-| Firmware | LVGL refresh | of which flush | Estimated ceiling |
-| --- | --- | --- | --- |
-| ESP-IDF 5.5.5, LVGL 9.5 (PPA off) | 28.0 ms | 4.6 ms | ~35 fps |
-| ESP-IDF 6.0.1, LVGL 9.6, `LV_USE_PPA` (fills) | 28.6 ms | 4.6 ms | ~35 fps |
-| ESP-IDF 6.0.1, LVGL 9.6, `LV_USE_PPA` + `LV_USE_PPA_IMG` | 20.8 ms | 4.2 ms | ~48 fps |
+| Firmware | LVGL refresh | of which flush |
+| --- | --- | --- |
+| ESP-IDF 5.5.5, LVGL 9.5 (PPA off) | 28.0 ms | 4.6 ms |
+| ESP-IDF 6.0.1, LVGL 9.6, `LV_USE_PPA` (fills) | 28.6 ms | 4.6 ms |
+| ESP-IDF 6.0.1, LVGL 9.6, `LV_USE_PPA` + `LV_USE_PPA_IMG` | 20.8 ms | 4.2 ms |
 
 Fills on the PPA change nothing for this page; drawing the picture with the PPA saves about 8 ms
 per frame. Receive (1.7 ms) and decode (3.5 ms) did not change. The rest of the page and the home
 page looked right in screenshots. In the windows with IDF 6.0 the longest gap between two frames
 was 230–275 ms (150–165 ms before); with 0 skipped frames this is probably the camera or Wi-Fi, but
 it has not been looked into yet.
+
+**Ceiling, measured** with a synthetic source on the last firmware (ESP-IDF 6.0.1, `LV_USE_PPA_IMG`,
+no rotation, no `clip_corner`), two 30-second windows each:
+
+| Input | Shown | Skipped | JPEG size | Decode | Hand-off | LVGL refresh (of which flush) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Synthetic, 30 fps | 29.9 fps | 0.1 % | 8.6 KB | 4.7 ms | 2.0 ms | 22.2 ms (4.8 ms) |
+| Synthetic, 60 fps | 38.8 fps | 35 % | 8.6 KB | 5.5 ms | 8.4 ms | 23.2 ms (4.6 ms) |
+
+So the display now shows up to about **39 fps**, against 21.5 fps with `rotation: 180` on IDF 5.5
+(same page, *Results* above). That is less than 1000 / 23 ms: between two refreshes the main loop
+also runs the other components (touch, API, clock), and a frame waits for that before it is put on
+the canvas (hand-off 8 ms at 60 fps). No errors, and the 60 fps input (0.5 MB/s) arrived completely.
+
+This test source came from go2rtc's built-in ffmpeg test picture, set through its API without a
+restart (see *How to measure*). It encodes with ffmpeg's default MJPEG quality, so the JPEGs are
+8.6 KB instead of about 17 KB in the earlier synthetic tests (`-q:v 8`). The LVGL refresh does not
+depend on the JPEG size; decoding is slightly cheaper with smaller files.
+
+The estimated ~35 fps without rotation on IDF 5.5 (*Without the 180° rotation*) was not measured.
 
 With LVGL 9.6 the compiler warns that `lv_obj_add_flag()`, `lv_obj_remove_flag()` and
 `lv_obj_has_flag()` are deprecated (`lv_obj_set_hidden()` and so on). The doorbell package still
@@ -295,6 +315,19 @@ streams:
 ```
 
 Change `rate=30` to test other frame rates. Put the original line back afterwards.
+
+Without editing the file or restarting: go2rtc's API can change the source of a stream until the
+next restart (`PATCH` does not write the config). go2rtc refuses `exec:` sources through the API,
+but its ffmpeg test picture works:
+
+```
+curl -u <user>:<password> -X PATCH "http://<ha-ip>:1984/api/streams?name=doorbell_mjpeg&src=ffmpeg%3Avirtual%3Fvideo%3Dtestsrc2%26size%3D640x480%26rate%3D60%23video%3Dmjpeg"
+```
+
+The new source is used when the stream starts again, so close the page first (and remove a
+`preload` of that stream with `curl -X DELETE ".../api/preload?src=doorbell_mjpeg"`; add it back
+afterwards with `curl -X PUT ".../api/preload?src=doorbell_mjpeg&video"`). Put the original source
+back the same way, with `src=ffmpeg%3Adoorbell%23video%3Dmjpeg`.
 
 ### 4. Latency
 

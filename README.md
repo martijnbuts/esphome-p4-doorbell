@@ -54,15 +54,20 @@ On a Waveshare ESP32-P4-WIFI6-Touch-LCD-7B with a Reolink D340P (sub-stream 640�
 | Frames per second | 0.4 | 3.6 | 10 (the camera's frame rate) |
 | Receive + decode per frame | ~2.7 s in the main loop | ~0.25 s, background task | ~7 ms, background task |
 
-With a synthetic 30 fps source the display showed up to 21 fps. The limit is the LVGL refresh of the
-640×480 canvas, not the network or the decoder: ~41 ms per frame with LVGL `rotation: 180`, 28 ms
-without rotation, 21 ms with ESP-IDF 6.0 and LVGL drawing the picture with the PPA. With a go2rtc `preload` the first frame is on the screen 0.13 s after the page
-opens (7.7 s without). Details, how to measure and ideas to make it faster:
+The limit is the LVGL refresh of the 640×480 canvas, not the network or the decoder:
+
+| Display firmware | LVGL refresh per frame | Synthetic source shown |
+| --- | --- | --- |
+| LVGL `rotation: 180`, ESP-IDF 5.5 | ~41 ms | 30 fps in → 21.5 fps |
+| No rotation, ESP-IDF 6.0, LVGL draws the picture with the PPA | ~21 ms | 30 fps in → 29.9 fps; 60 fps in → 38.8 fps |
+
+With a go2rtc `preload` the first frame is on the screen 0.13 s after the page opens (7.7 s
+without). Details, how to measure and ideas to make it faster:
 **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)**.
 
 ## Requirements
 
-ESP32-P4 with PSRAM, ESPHome 2026.11.0-dev or newer (ESP-IDF 5.5, LVGL 9),
+ESP32-P4 with PSRAM, ESPHome 2026.11.0-dev or newer (ESP-IDF 5.5 or 6.0, LVGL 9),
 Home Assistant with the go2rtc add-on for the MJPEG stream and the audio.
 
 ## Credits

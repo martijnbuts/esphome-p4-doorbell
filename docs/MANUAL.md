@@ -217,7 +217,7 @@ Control: open the page and look at the media player in Home Assistant. It should
 
 ## Performance
 
-On the tested display a frame takes about 2–3.5 ms to receive and 3.5 ms to decode. The limit is the LVGL refresh of the 640×480 picture on the main loop. The camera delivers 10 fps, so every frame is shown in all set-ups below.
+On the tested display a frame takes about 2–3.5 ms to receive and 3.5 ms to decode. The limit is the LVGL refresh of the 640×480 picture on the main loop. The camera delivers 10 fps, so every camera frame is shown in all set-ups below. With the synthetic source the display now shows up to 39 fps, against 21.5 fps before.
 
 Measured on 12 October 2026 on the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (360 MHz, `buffer_size: 100%`) with ESPHome 2026.11.0-dev. The synthetic source is an ffmpeg test picture of 640×480 from go2rtc.
 
@@ -228,6 +228,8 @@ Measured on 12 October 2026 on the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (360 MH
 | `rotation: 180` | Synthetic, 30 fps | 21.5 fps (29 % skipped) | 45.7 ms (19.5 ms) |
 | No rotation | Camera, 10 fps | 10.0 fps | 28.0 ms (4.6 ms) |
 | No rotation, ESP-IDF 6.0, `LV_USE_PPA_IMG` | Camera, 10 fps | 10.0 fps | 20.8 ms (4.2 ms) |
+| No rotation, ESP-IDF 6.0, `LV_USE_PPA_IMG` | Synthetic, 30 fps | 29.9 fps (0.1 % skipped) | 22.2 ms (4.8 ms) |
+| No rotation, ESP-IDF 6.0, `LV_USE_PPA_IMG` | Synthetic, 60 fps | 38.8 fps (35 % skipped) | 23.2 ms (4.6 ms) |
 
 What made the difference:
 
