@@ -111,8 +111,8 @@ The time from opening the page to the first frame on the screen. The display log
 
 Most of the 7.7 s is ffmpeg: starting, probing the RTSP stream and waiting for the next key frame of
 the camera. Home Assistant's own go2rtc already had the camera stream loaded. With `preload`, go2rtc
-keeps the ffmpeg conversion running all the time; on this Home Assistant host that cost about 2 % CPU
-(add-on statistics) and 25 MB of memory.
+keeps the ffmpeg conversion running all the time; on this Home Assistant host the go2rtc add-on then
+used 0.5 % CPU with the page closed and 2 % with the page open (Supervisor add-on statistics).
 
 `example/prewarm.yaml` starts the stream on the display as soon as a presence sensor turns on. On
 this doorbell the person detection came only 0.2–3 s (median about 1 s) before the ring

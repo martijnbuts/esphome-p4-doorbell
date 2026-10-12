@@ -62,7 +62,7 @@ This step makes an MJPEG stream of the doorbell that the display can read. The g
      level: info
    ```
 
-   The `preload` keeps ffmpeg running all the time. Without it, ffmpeg only starts when the display opens the page, and the first frame takes about 8 s (ffmpeg start and the next key frame of the camera). It cost about 2 % CPU and 25 MB of memory on the tested Home Assistant host; leave it out if that matters more to you.
+   The `preload` keeps ffmpeg running all the time. Without it, ffmpeg only starts when the display opens the page, and the first frame takes about 8 s (ffmpeg start and the next key frame of the camera). On the tested Home Assistant host the go2rtc add-on then used about 0.5 % CPU with the page closed; leave it out if that matters more to you.
 5. Restart the add-on and open its *Log* tab. You should see `[api] listen addr=:1984` and no errors.
 
 Control: from a computer in your LAN, run

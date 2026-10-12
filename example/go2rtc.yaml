@@ -9,7 +9,7 @@
 #                   on the display's media player. Requests from 127.0.0.1 need no password.
 #   preload:        keeps the MJPEG conversion running, so the first frame is on the display in
 #                   about 0.1 s instead of about 8 s (ffmpeg start + waiting for a key frame).
-#                   Costs about 2 % CPU and 25 MB on a typical Home Assistant host. Leave it out
+#                   Cost about 0.5 % CPU on the tested Home Assistant host (add-on statistics). Leave it out
 #                   if that matters more than the start-up time.
 
 api:
