@@ -44,8 +44,10 @@ void JpegStream::dump_config() {
                 "  Max size: %ux%u\n"
                 "  Max JPEG size: %" PRIu32 " bytes\n"
                 "  Timeout: %" PRIu32 " ms\n"
-                "  Min interval: %" PRIu32 " ms",
-                this->max_width_, this->max_height_, this->max_jpeg_size_, this->timeout_, this->min_interval_);
+                "  Min interval: %" PRIu32 " ms\n"
+                "  Stats interval: %" PRIu32 " ms",
+                this->max_width_, this->max_height_, this->max_jpeg_size_, this->timeout_, this->min_interval_,
+                this->stats_interval_);
 }
 
 void JpegStream::set_url(const std::string &url) {
@@ -104,9 +106,23 @@ void JpegStream::start() {
       return;
     }
   }
+  if (this->stats_interval_ > 0 && !this->display_events_added_) {
+    // Time every LVGL refresh that renders something, to see what drawing the frames costs.
+    lv_display_t *disp = lv_obj_get_display(this->canvas_);
+    if (disp != nullptr) {
+      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_REFR_START, this);
+      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_RENDER_START, this);
+      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_REFR_READY, this);
+      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_FLUSH_START, this);
+      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_FLUSH_FINISH, this);
+      this->display_events_added_ = true;
+    }
+  }
   this->enable_loop();
-  if (!this->running_.exchange(true))
+  if (!this->running_.exchange(true)) {
+    this->reset_stats_();
     xTaskNotifyGive(this->task_);
+  }
 }
 
 void JpegStream::stop() { this->running_ = false; }
@@ -124,6 +140,14 @@ void JpegStream::loop() {
       lv_obj_set_size(this->canvas_, this->canvas_width_, this->canvas_height_);
     }
     lv_obj_invalidate(this->canvas_);
+    const uint32_t now_us = micros();
+    const uint32_t handoff = now_us - this->ready_at_us_;
+    this->handoff_us_ += handoff;
+    this->handoff_us_max_ = std::max(this->handoff_us_max_, handoff);
+    if (this->stats_shown_ > 0)
+      this->gap_us_max_ = std::max(this->gap_us_max_, now_us - this->last_shown_us_);
+    this->last_shown_us_ = now_us;
+    this->stats_shown_++;
     this->shown_ = index;
     this->ready_ = -1;
     this->frame_count_++;
@@ -137,11 +161,94 @@ void JpegStream::loop() {
     } else {
       ESP_LOGW(TAG, "Frame failed: %s", esp_err_to_name(error));
     }
+    this->stats_errors_++;
     this->error_callback_.call();
   }
 
+  if (this->stats_interval_ > 0 && this->running_ && millis() - this->stats_start_ >= this->stats_interval_)
+    this->log_stats_();
+
   if (!this->running_ && this->ready_ < 0)
     this->disable_loop();
+}
+
+void JpegStream::display_event_(lv_event_t *event) {
+  auto *self = static_cast<JpegStream *>(lv_event_get_user_data(event));
+  if (!self->running_)
+    return;
+  switch (lv_event_get_code(event)) {
+    case LV_EVENT_REFR_START:
+      self->refresh_start_us_ = micros();
+      self->refresh_rendered_ = false;
+      self->refresh_flush_us_ = 0;
+      break;
+    case LV_EVENT_FLUSH_START:
+      self->flush_start_us_ = micros();
+      break;
+    case LV_EVENT_FLUSH_FINISH:
+      if (self->flush_start_us_ != 0)
+        self->refresh_flush_us_ += micros() - self->flush_start_us_;
+      break;
+    case LV_EVENT_RENDER_START:
+      self->refresh_rendered_ = true;
+      break;
+    case LV_EVENT_REFR_READY:
+      if (self->refresh_rendered_ && self->refresh_start_us_ != 0) {
+        const uint32_t took = micros() - self->refresh_start_us_;
+        self->refresh_us_ += took;
+        self->refresh_us_max_ = std::max(self->refresh_us_max_, took);
+        self->flush_us_ += self->refresh_flush_us_;
+        self->refreshes_++;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+void JpegStream::reset_stats_() {
+  {
+    LockGuard guard(this->stats_mutex_);
+    this->task_stats_ = TaskStats{};
+  }
+  this->stats_start_ = millis();
+  this->stats_dropped_start_ = this->dropped_count_;
+  this->stats_shown_ = this->stats_errors_ = 0;
+  this->handoff_us_ = this->handoff_us_max_ = this->gap_us_max_ = 0;
+  this->refreshes_ = this->refresh_us_ = this->refresh_us_max_ = this->flush_us_ = 0;
+}
+
+void JpegStream::log_stats_() {
+  TaskStats task;
+  {
+    LockGuard guard(this->stats_mutex_);
+    task = this->task_stats_;
+  }
+  const uint32_t now = millis();
+  const uint32_t dropped = this->dropped_count_;
+  if (now > this->stats_start_) {
+    const float seconds = (now - this->stats_start_) / 1000.0f;
+    const auto avg_ms = [](uint32_t sum_us, uint32_t count) { return count ? sum_us / 1000.0f / count : 0.0f; };
+    ESP_LOGI(TAG,
+             "Stats over %.1f s: %.1f fps shown (%" PRIu32 " shown, %" PRIu32 " received, %" PRIu32
+             " skipped, %" PRIu32 " errors)\n"
+             "  JPEG size: avg %.1f KB, %.0f KB/s\n"
+             "  Receive:   avg %.1f ms, max %.1f ms\n"
+             "  Decode:    avg %.1f ms, max %.1f ms\n"
+             "  Hand-off:  avg %.1f ms, max %.1f ms (task -> canvas in the main loop)\n"
+             "  Frame gap: max %.1f ms\n"
+             "  LVGL refresh: %" PRIu32 " x, avg %.1f ms, max %.1f ms (layout + render + flush)\n"
+             "  LVGL flush:   avg %.1f ms per refresh (flush_cb: copy to the display)",
+             seconds, this->stats_shown_ / seconds, this->stats_shown_, task.received,
+             dropped - this->stats_dropped_start_, this->stats_errors_,
+             task.received ? task.bytes / 1024.0f / task.received : 0.0f, task.bytes / 1024.0f / seconds,
+             avg_ms(task.receive_us, task.received), task.receive_us_max / 1000.0f,
+             avg_ms(task.decode_us, task.decoded), task.decode_us_max / 1000.0f,
+             avg_ms(this->handoff_us_, this->stats_shown_), this->handoff_us_max_ / 1000.0f,
+             this->gap_us_max_ / 1000.0f, this->refreshes_, avg_ms(this->refresh_us_, this->refreshes_),
+             this->refresh_us_max_ / 1000.0f, avg_ms(this->flush_us_, this->refreshes_));
+  }
+  this->reset_stats_();
 }
 
 void JpegStream::task_entry_(void *arg) { static_cast<JpegStream *>(arg)->run_task_(); }
@@ -157,6 +264,7 @@ void JpegStream::run_task_() {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     while (this->running_) {
       const uint32_t begin = millis();
+      const uint32_t begin_us = micros();
       {
         LockGuard guard(this->url_mutex_);
         strncpy(url, this->url_.c_str(), sizeof(url) - 1);
@@ -176,8 +284,10 @@ void JpegStream::run_task_() {
           this->close_();
         } else {
           result = this->read_image_();
-          if (result == 0)
+          if (result == 0) {
+            this->add_receive_stats_(micros() - begin_us, this->jpeg_len_);
             result = this->present_(begin);
+          }
         }
       }
       if (result != 0) {
@@ -323,6 +433,7 @@ int JpegStream::read_stream_() {
   bool skip = false;
   size_t remaining = 0;
   uint32_t part_begin = 0;
+  uint32_t part_begin_us = 0;
 
   while (this->running_ && !this->url_changed_) {
     // esp_http_client_read() only returns when the buffer is full (or on a timeout), so in a part
@@ -355,6 +466,7 @@ int JpegStream::read_stream_() {
             skip = remaining > this->max_jpeg_size_;
             this->jpeg_len_ = 0;
             part_begin = millis();
+            part_begin_us = micros();
             header_len = 0;
             in_body = true;
           }
@@ -372,6 +484,8 @@ int JpegStream::read_stream_() {
         continue;
 
       in_body = false;
+      if (!skip)
+        this->add_receive_stats_(micros() - part_begin_us, this->jpeg_len_);
       if (skip) {
         this->error_ = ESP_ERR_INVALID_SIZE;
         App.wake_loop_threadsafe();
@@ -404,9 +518,18 @@ int JpegStream::present_(uint32_t begin) {
     return result;
   this->last_present_ = millis();
   this->last_frame_time_ = this->last_present_ - begin;
+  this->ready_at_us_ = micros();
   this->ready_ = target;
   App.wake_loop_threadsafe();
   return 0;
+}
+
+void JpegStream::add_receive_stats_(uint32_t took_us, size_t bytes) {
+  LockGuard guard(this->stats_mutex_);
+  this->task_stats_.received++;
+  this->task_stats_.bytes += bytes;
+  this->task_stats_.receive_us += took_us;
+  this->task_stats_.receive_us_max = std::max(this->task_stats_.receive_us_max, took_us);
 }
 
 int JpegStream::decode_(uint8_t target) {
@@ -423,6 +546,7 @@ int JpegStream::decode_(uint8_t target) {
       .conv_std = JPEG_YUV_RGB_CONV_STD_BT601,
   };
   uint32_t out_size = 0;
+  const uint32_t decode_start = micros();
   err = jpeg_decoder_process(this->decoder_, &cfg, this->jpeg_buf_, this->jpeg_len_, this->frame_buf_[target],
                              this->frame_buf_size_, &out_size);
   if (err != ESP_OK) {
@@ -435,6 +559,13 @@ int JpegStream::decode_(uint8_t target) {
                                this->frame_buf_size_, &out_size);
     if (err != ESP_OK)
       return err;
+  }
+  {
+    const uint32_t took = micros() - decode_start;
+    LockGuard guard(this->stats_mutex_);
+    this->task_stats_.decoded++;
+    this->task_stats_.decode_us += took;
+    this->task_stats_.decode_us_max = std::max(this->task_stats_.decode_us_max, took);
   }
 
   // Rows are padded to whole MCU blocks: 16 pixels wide for 4:2:0 and 4:2:2, otherwise 8.

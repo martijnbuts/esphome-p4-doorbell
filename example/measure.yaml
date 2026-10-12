@@ -1,0 +1,72 @@
+# Measurement package: where does the time go on the ESP32-P4?
+# Include it next to doorbell.yaml while you measure, and remove it afterwards
+# (the FreeRTOS run time statistics cost a little CPU and RAM).
+#
+#   runtime_stats  every 30 s: time per component in the ESPHome main loop
+#                  (lvgl = rendering and flushing, jpeg_stream = swapping the canvas buffer)
+#   cpu            every 30 s: CPU load per FreeRTOS task over the last 30 s, in % of one core
+#                  (the ESP32-P4 has two cores: IDLE0 + IDLE1 + all tasks add up to 200 %)
+#
+# It also sets stats_interval: 10s on jpeg_stream (receive, decode, hand-off and LVGL refresh times)
+# and adds an A/B switch. See docs/PERFORMANCE.md.
+
+jpeg_stream:
+  - id: !extend doorbell_stream
+    stats_interval: 10s
+
+# A/B test while the page is open: clip_corner on the card around the video
+# (doorbell.yaml has none; turning it on cost ~10 ms per frame in our measurement)
+switch:
+  - platform: template
+    name: "Measure: clip_corner on the video card"
+    id: measure_clip_corner
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    entity_category: config
+    turn_on_action:
+      - lambda: 'lv_obj_set_style_clip_corner(lv_obj_get_parent(id(doorbell_video)), true, LV_PART_MAIN);'
+    turn_off_action:
+      - lambda: 'lv_obj_set_style_clip_corner(lv_obj_get_parent(id(doorbell_video)), false, LV_PART_MAIN);'
+
+esp32:
+  framework:
+    sdkconfig_options:
+      CONFIG_FREERTOS_USE_TRACE_FACILITY: y
+      CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS: y
+      CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID: y   # core of each task in TaskStatus_t
+
+runtime_stats:
+  log_interval: 30s   # each report is ~60 log lines; that burst stalls the main loop for ~0.5 s
+
+interval:
+  - interval: 30s
+    then:
+      - lambda: |-
+          // CPU per FreeRTOS task since the previous run (run time counters are in microseconds)
+          struct Prev { TaskHandle_t handle; uint32_t counter; };
+          static std::vector<Prev> prev;
+          static uint32_t prev_total = 0;
+          std::vector<TaskStatus_t> tasks(uxTaskGetNumberOfTasks() + 8);
+          configRUN_TIME_COUNTER_TYPE total = 0;
+          const UBaseType_t n = uxTaskGetSystemState(tasks.data(), tasks.size(), &total);
+          tasks.resize(n);
+          const uint32_t elapsed = (uint32_t) total - prev_total;
+          prev_total = (uint32_t) total;
+          struct Row { const char *name; int core; float pct; };
+          std::vector<Row> rows;
+          std::vector<Prev> next;
+          for (const auto &t : tasks) {
+            const uint32_t now = (uint32_t) t.ulRunTimeCounter;
+            uint32_t before = now;
+            for (const auto &p : prev)
+              if (p.handle == t.xHandle)
+                before = p.counter;
+            next.push_back({t.xHandle, now});
+            const int core = t.xCoreID > 1 ? -1 : (int) t.xCoreID;
+            rows.push_back({t.pcTaskName, core, elapsed ? 100.0f * (now - before) / elapsed : 0.0f});
+          }
+          prev = next;
+          std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.pct > b.pct; });
+          ESP_LOGI("cpu", "CPU per task over the last %.1f s (%% of one core, core -1 = any):", elapsed / 1e6f);
+          for (size_t i = 0; i < rows.size() && i < 14; i++)
+            ESP_LOGI("cpu", "  %-16s core %2d  %5.1f %%", rows[i].name, rows[i].core, rows[i].pct);

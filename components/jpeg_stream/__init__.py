@@ -12,6 +12,9 @@ A background task receives the images and decodes them with the ESP32-P4 hardwar
 so the main loop is never blocked by networking or decoding. Each frame is shown as soon as it is
 decoded; a frame that arrives while the previous one is not shown yet is skipped (lowest latency).
 
+With stats_interval set, it logs where the time goes (receive, decode, hand-off to the main loop,
+LVGL refresh) every interval while the stream runs; see docs/PERFORMANCE.md.
+
 The hardware JPEG decoding follows the approach of the transcoder and picture_viewer components
 in https://github.com/p1ngb4ck/esphome (engine setup, buffer allocation, recreate after an error).
 """
@@ -36,6 +39,7 @@ CONF_MAX_JPEG_SIZE = "max_jpeg_size"
 CONF_MAX_WIDTH = "max_width"
 CONF_MIN_INTERVAL = "min_interval"
 CONF_ON_FRAME = "on_frame"
+CONF_STATS_INTERVAL = "stats_interval"
 
 jpeg_stream_ns = cg.esphome_ns.namespace("jpeg_stream")
 JpegStream = jpeg_stream_ns.class_("JpegStream", cg.Component)
@@ -56,6 +60,10 @@ CONFIG_SCHEMA = cv.All(
             ): cv.positive_time_period_milliseconds,
             cv.Optional(
                 CONF_MIN_INTERVAL, default="0ms"
+            ): cv.positive_time_period_milliseconds,
+            # log receive/decode/hand-off/LVGL refresh times every interval while running (0s = off)
+            cv.Optional(
+                CONF_STATS_INTERVAL, default="0s"
             ): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_ON_FRAME): automation.validate_automation({}),
             cv.Optional(CONF_ON_ERROR): automation.validate_automation({}),
@@ -121,6 +129,7 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_canvas(canvas))
     cg.add(var.set_timeout(config[CONF_TIMEOUT]))
     cg.add(var.set_min_interval(config[CONF_MIN_INTERVAL]))
+    cg.add(var.set_stats_interval(config[CONF_STATS_INTERVAL]))
     if (url := config.get(CONF_URL)) is not None:
         cg.add(var.set_url(url))
     await automation.build_callback_automations(var, config, _CALLBACK_AUTOMATIONS)

@@ -350,7 +350,7 @@ lvgl:
                   bg_color: 0x000000
                   border_width: 0
                   radius: 12
-                  clip_corner: true
+                  # no clip_corner: it costs ~10 ms per frame (docs/PERFORMANCE.md)
                   scrollable: false
                   widgets:
                     - label:

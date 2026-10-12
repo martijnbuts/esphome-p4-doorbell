@@ -33,6 +33,8 @@ class JpegStream : public Component {
   void set_canvas(lv_obj_t *canvas) { this->canvas_ = canvas; }
   void set_timeout(uint32_t timeout_ms) { this->timeout_ = timeout_ms; }
   void set_min_interval(uint32_t interval_ms) { this->min_interval_ = interval_ms; }
+  /// Log performance statistics every interval while the stream runs (0 = off).
+  void set_stats_interval(uint32_t interval_ms) { this->stats_interval_ = interval_ms; }
 
   /// Thread-safe; the new URL is used for the next frame (an open MJPEG stream is reconnected).
   void set_url(const std::string &url);
@@ -68,6 +70,10 @@ class JpegStream : public Component {
   /// Decodes jpeg_buf_ into the free frame buffer and hands it to the main loop.
   int present_(uint32_t begin);
   void close_();
+  void log_stats_();
+  void reset_stats_();
+  void add_receive_stats_(uint32_t took_us, size_t bytes);
+  static void display_event_(lv_event_t *event);
   bool create_decoder_();
   void wait_while_running_(uint32_t ms);
 
@@ -77,6 +83,7 @@ class JpegStream : public Component {
   uint32_t max_jpeg_size_;
   uint32_t timeout_{5000};
   uint32_t min_interval_{0};
+  uint32_t stats_interval_{0};
 
   Mutex url_mutex_;
   std::string url_;
@@ -113,6 +120,38 @@ class JpegStream : public Component {
   uint32_t frame_count_{0};
   uint16_t canvas_width_{0};
   uint16_t canvas_height_{0};
+
+  // Statistics. TaskStats is written by the stream task under stats_mutex_; the rest is only used
+  // in the main loop (loop() and the LVGL display events, which run from the LVGL timer handler).
+  struct TaskStats {
+    uint32_t received{0};        // complete JPEGs received
+    uint32_t bytes{0};           // their total size
+    uint32_t receive_us{0};      // receive time: request (single image) or part start (MJPEG) -> last byte
+    uint32_t receive_us_max{0};
+    uint32_t decoded{0};         // JPEGs decoded by the hardware decoder
+    uint32_t decode_us{0};       // jpeg_decoder_process() time
+    uint32_t decode_us_max{0};
+  };
+  Mutex stats_mutex_;
+  TaskStats task_stats_{};
+  std::atomic<uint32_t> ready_at_us_{0};  // micros() when the task handed a frame to the main loop
+  uint32_t stats_start_{0};
+  uint32_t stats_dropped_start_{0};
+  uint32_t stats_shown_{0};
+  uint32_t stats_errors_{0};
+  uint32_t handoff_us_{0};       // ready_ set by the task -> frame put on the canvas in loop()
+  uint32_t handoff_us_max_{0};
+  uint32_t last_shown_us_{0};
+  uint32_t gap_us_max_{0};       // longest time between two frames on the canvas
+  uint32_t refresh_start_us_{0};
+  bool refresh_rendered_{false};
+  uint32_t refreshes_{0};        // LVGL refresh cycles that rendered something
+  uint32_t refresh_us_{0};       // LVGL refresh time: layout + render + flush to the display
+  uint32_t refresh_us_max_{0};
+  uint32_t flush_start_us_{0};
+  uint32_t refresh_flush_us_{0}; // flush_cb time within the current refresh
+  uint32_t flush_us_{0};         // flush_cb time (copy to the display) summed over the window
+  bool display_events_added_{false};
 
   CallbackManager<void()> frame_callback_;
   CallbackManager<void()> error_callback_;
