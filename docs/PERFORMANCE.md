@@ -87,6 +87,81 @@ Not tried yet, roughly in order of expected gain.
 | Double draw buffers or LVGL direct mode | Lets rendering of the next area overlap with the flush of the previous one |
 | Keep parents of the canvas plain | No `clip_corner`, opacity, transforms or shadows on the card: each makes LVGL take a slower blend path (`clip_corner` alone cost 10 ms) |
 
+## Comparison with simple_video_player
+
+[`simple_video_player`](https://github.com/p1ngb4ck/esphome/tree/testing_dev/esphome/components/simple_video_player)
+in p1ngb4ck's ESPHome fork, together with the Home Assistant integration *SVP Relay* (0.7.0), solves
+the same problem from the other side. Read from the source on 12 October 2026 (`testing_dev` at
+`b073c92`); not measured on this board yet.
+
+### How it works
+
+- **Push, not pull.** The display listens on a TCP port (`stream_port`, default 5000). SVP Relay
+  connects to it from Home Assistant and sends one endless AVI: MJPEG pictures plus 16-bit PCM
+  sound, interleaved. ffmpeg on the Home Assistant host makes it from any source (camera entity,
+  media browser, Enigma2, M3U).
+- **The display says what it wants.** Right after the connection it sends the picture size and the
+  number of quarter turns. ffmpeg scales, pads and **rotates on the Home Assistant host**, so the
+  P4 never rotates.
+- **Two outputs:**
+  - `canvas_id`: decode into an LVGL canvas, as `jpeg_stream` does.
+  - `display_id` (direct output): LVGL is paused while the video plays, and each decoded frame
+    goes to the panel with `draw_pixels_at()`.
+- **Pacing.** A video task (priority 1, core 1) paces by wall clock at `target_fps`. A ring buffer
+  absorbs gaps. Frames are never dropped.
+
+### Against the bottleneck measured here
+
+| | `jpeg_stream` (this repo) | `simple_video_player`, canvas | `simple_video_player`, direct |
+| --- | --- | --- | --- |
+| Source | Pulls MJPEG over HTTP (go2rtc) | Push from SVP Relay | Push from SVP Relay |
+| Decoded format | RGB565 | RGB888 | Panel depth (RGB565 or RGB888) |
+| LVGL render of the picture | Yes, ~24 ms per frame | Yes (RGB888 → probably more) | No: LVGL paused |
+| Rotation on the P4 | Yes, in the LVGL flush (PPA) | Yes, in the LVGL flush | No: done by ffmpeg on the HA host |
+| Rest of the page (buttons, clock) | Stays visible | Stays visible | Not drawn while the video plays |
+| Sound | Separate: go2rtc AAC as a media player announcement | In the same stream, in sync | In the same stream, in sync |
+| Expected ceiling | ~21 fps (measured) | Similar to `jpeg_stream` | Decode + copy only; the fork's notes give 25 fps (40 ms) as the target for everything per frame |
+
+Direct output is the first idea in *Ideas to make it faster*. It removes both the LVGL render and
+the rotation, at the price of a full-screen picture without the LVGL page.
+
+### Points for this board and for a doorbell
+
+1. **Direct output refuses 1024×600.** `init_dsi_output_()` requires both panel dimensions to be a
+   multiple of 16 (the hardware JPEG decoder writes whole 16×16 blocks), and 600 is not
+   (600 = 37.5 × 16). The Waveshare 7B (and other 1024×600 panels) log *"panel 1024x600 is not a
+   multiple of 16 on both axes"*. Possible fix: allocate the decode buffer for 1024×608, decode the
+   1024×600 JPEG into it, and draw only the first 600 rows. The width is a multiple of 16, so the
+   rows are contiguous and `draw_pixels_at()` stays a single transfer.
+2. **RGB565 from the hardware decoder.** The fork uses RGB888 on the canvas path, because RGB565
+   output "is buggy on some silicon revs". `jpeg_stream` decodes to RGB565 (BGR order) on an
+   ESP32-P4 rev 1.3 without visible errors in our tests. If RGB565 is fine on newer revisions,
+   the canvas path could use a third less memory and PSRAM bandwidth there.
+3. **JPEG decoder and PPA at the same time.** The fork pins decoding to core 1, so it never runs
+   together with the PPA rotation (both use DMA2D, which can hang: esp-idf#18999). `jpeg_stream`
+   decodes in a background task while LVGL may be rotating with the PPA. No hang has been seen
+   here, but it is a known risk for this component.
+4. **Latency.** For a doorbell, delay matters more than frame rate. The relay sends what ffmpeg
+   read while probing a live source (up to 1 MB / 1 s) at once, and the display plays it at a
+   steady pace. So the glass-to-glass delay is probably at least that initial buffer. It should be
+   measured with the method in *4. Latency* below; `jpeg_stream` stays under 1 s.
+5. **Frame rate of the relay.** The relay's `fps` is per display (default 25). A 10 fps doorbell
+   camera then sends every picture 2.5 times: more Wi-Fi traffic and decoding for the same
+   motion.
+6. **Load on Home Assistant.** Each session runs ffmpeg on the Home Assistant host: H.264 decode,
+   scale, rotate and MJPEG encode at the panel's size. With go2rtc the conversion is the same, but
+   at the camera's size (640×480) and frame rate.
+7. **Requirements.**
+   - The fork's components and ESP-IDF 6.1: wifi, network, api, lvgl, mipi_dsi, audio and more.
+   - The SVP Relay integration in Home Assistant.
+   - A Home Assistant token in the firmware (only for the channel dropdown).
+   - Firewall: Home Assistant → display on TCP 5000, the opposite direction from the go2rtc setup.
+
+**In short:** with direct output and the 600-row fix, `simple_video_player` is the most promising
+way past the LVGL ceiling measured here. It also brings sound in sync with the picture.
+`jpeg_stream` keeps the doorbell page with its buttons visible, and its latency for a live camera
+is measured under 1 s. Measuring both on the same board, with the method below, would settle it.
+
 ## How to measure
 
 ### 1. Statistics from the component
