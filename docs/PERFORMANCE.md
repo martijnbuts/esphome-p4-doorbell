@@ -114,8 +114,28 @@ depend on the JPEG size; decoding is slightly cheaper with smaller files.
 The estimated ~35 fps without rotation on IDF 5.5 (*Without the 180° rotation*) was not measured.
 
 With LVGL 9.6 the compiler warns that `lv_obj_add_flag()`, `lv_obj_remove_flag()` and
-`lv_obj_has_flag()` are deprecated (`lv_obj_set_hidden()` and so on). The doorbell package still
-uses the old calls, so that it also builds with LVGL 9.5.
+`lv_obj_has_flag()` are deprecated (`lv_obj_set_hidden()` and so on). Since 19 October 2026 the
+doorbell package no longer calls them: it shows and hides the picture with ESPHome's own
+`lvgl.widget.show` and `lvgl.widget.hide`, which use the right call for the LVGL version ESPHome
+builds with. ESPHome dev builds every configuration with LVGL 9.6 since 12 October 2026 (also with
+ESP-IDF 5.5, where the PPA stays off); ESPHome 2026.10 still uses LVGL 9.5.
+
+#### ESP-IDF 6.1
+
+The author's display runs ESP-IDF 6.1.0 since 14 October 2026, with the same settings
+(`LV_USE_PPA_IMG`, no rotation); the frame rate has not been measured again. Two changes in
+ESP-IDF 6.1 matter for this board
+([release notes](https://github.com/espressif/esp-idf/releases/tag/v6.1)):
+
+- It builds for ESP32-P4 chip revision v3.0 by default, and older chips need a separate build.
+  ESPHome takes care of this from the board: `esp32-p4-evboard` builds for revisions below v3.0
+  (the tested board has v1.3), `esp32-p4_r3-evboard` for v3.0 and newer. The boot log shows the
+  revision (`chip revision: vX.Y`).
+- The JPEG decoder checks images more strictly against malformed input. go2rtc's MJPEG is normal
+  ffmpeg output; a frame that is refused counts as an error in the statistics.
+
+Without a `version`, ESPHome uses its recommended ESP-IDF: 5.5.6 since 17 October 2026
+([esphome#20987](https://github.com/esphome/esphome/pull/20987)).
 
 ### Start-up time
 
@@ -187,14 +207,17 @@ Not tried yet, roughly in order of expected gain.
 | ~~Use the LVGL PPA draw unit for image blits~~ | Done with ESP-IDF 6.0 and `LV_USE_PPA_IMG`: refresh 28 → 21 ms, see *ESP-IDF 6.0 and LVGL drawing with the PPA* |
 | ~~Avoid the 180° rotation~~ | Done: refresh 41 → 28 ms, see *Without the 180° rotation* |
 | Double draw buffers or LVGL direct mode | Lets rendering of the next area overlap with the flush of the previous one |
+| Keep the JPEG decoder and the PPA apart | Not for speed but for stability: see *DMA2D: JPEG decoder and PPA* |
 | Keep parents of the canvas plain | No `clip_corner`, opacity, transforms or shadows on the card: each makes LVGL take a slower blend path (`clip_corner` alone cost 10 ms) |
 
 ## Comparison with simple_video_player
 
 [`simple_video_player`](https://github.com/p1ngb4ck/esphome/tree/testing_dev/esphome/components/simple_video_player)
-in p1ngb4ck's ESPHome fork, together with the Home Assistant integration *SVP Relay* (0.7.0), solves
+in p1ngb4ck's ESPHome fork, together with the Home Assistant integration *SVP Relay*, solves
 the same problem from the other side. Read from the source on 12 October 2026 (`testing_dev` at
-`b073c92`); not measured on this board yet.
+`b073c92`, SVP Relay 0.7.0) and again on 19 October 2026 (`testing_dev` at `80faf2e`, SVP Relay
+0.9.46); not measured on this board yet. Between those dates the component grew into a media player
+(pictures, audio files, screen capture); the points below still hold.
 
 ### How it works
 
@@ -239,10 +262,11 @@ the rotation, at the price of a full-screen picture without the LVGL page.
    output "is buggy on some silicon revs". `jpeg_stream` decodes to RGB565 (BGR order) on an
    ESP32-P4 rev 1.3 without visible errors in our tests. If RGB565 is fine on newer revisions,
    the canvas path could use a third less memory and PSRAM bandwidth there.
-3. **JPEG decoder and PPA at the same time.** The fork pins decoding to core 1, so it never runs
-   together with the PPA rotation (both use DMA2D, which can hang: esp-idf#18999). `jpeg_stream`
-   decodes in a background task while LVGL may be rotating with the PPA. No hang has been seen
-   here, but it is a known risk for this component.
+3. **JPEG decoder and PPA at the same time.** The fork runs decoding on core 1 with the same
+   priority as the main loop, so it takes turns with LVGL's PPA work (both use DMA2D, which can
+   hang). `jpeg_stream` decodes in a background task on any core while LVGL may draw with the PPA.
+   With `LV_USE_PPA_IMG` that happens for every frame. No hang has been traced to it here, but it
+   is a known risk for this component; see *DMA2D: JPEG decoder and PPA* below.
 4. **Latency.** For a doorbell, delay matters more than frame rate. The relay sends what ffmpeg
    read while probing a live source (up to 1 MB / 1 s) at once, and the display plays it at a
    steady pace. So the glass-to-glass delay is probably at least that initial buffer. It should be
@@ -263,6 +287,27 @@ the rotation, at the price of a full-screen picture without the LVGL page.
 way past the LVGL ceiling measured here. It also brings sound in sync with the picture.
 `jpeg_stream` keeps the doorbell page with its buttons visible, and its latency for a live camera
 is measured under 1 s. Measuring both on the same board, with the method below, would settle it.
+
+## DMA2D: JPEG decoder and PPA
+
+On the ESP32-P4 the hardware JPEG decoder and the PPA both move their data with the 2D-DMA
+controller (DMA2D). Two reports describe DMA2D getting stuck under load:
+
+| Report | What | Status on 19 October 2026 |
+| --- | --- | --- |
+| [esp-idf#18999](https://github.com/espressif/esp-idf/issues/18999) | Interrupt watchdog: `dma2d_connect()` waits forever for a channel reset, under continuous PPA load (ESP32-P4 rev 1.3; IDF 6.0, 6.1-rc1, master) | Closed by the reporter without a confirmed fix; followed up in #19108 |
+| [esp-idf#19108](https://github.com/espressif/esp-idf/issues/19108) | Channel reset never completes; from then on every DMA2D transfer hangs, without a crash or log. The reporter's pipeline runs `jpeg_decoder_process()` and the PPA in separate tasks | Open; Espressif cannot reproduce it yet. The reporter's workaround: one mutex around both calls |
+
+That is the situation of this component with `LV_USE_PPA_IMG`: the stream task decodes while LVGL
+draws the canvas with the PPA in the main loop. Two ways to keep them apart, neither built yet:
+
+1. Run the stream task on the main loop's core (core 1) with its priority, as `simple_video_player`
+   does. Cheap, but receiving then also competes with LVGL for that core.
+2. Take a lock in the stream task around `jpeg_decoder_process()`, and the same lock in the main
+   loop from `LV_EVENT_REFR_START` to `LV_EVENT_REFR_READY` (the events the statistics already use).
+   A decode (3.5–8 ms) then never overlaps an LVGL refresh that may use the PPA.
+
+If a display hangs without a log while the stream runs, this is the first suspect.
 
 ## How to measure
 

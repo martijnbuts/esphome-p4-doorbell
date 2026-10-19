@@ -55,12 +55,13 @@ jpeg_stream:
     # go2rtc only answers once ffmpeg has the first frame (it waits for a key frame)
     timeout: 10s
     on_frame:
+      # Native action instead of lv_obj_*_flag() in a lambda: those calls are deprecated since LVGL 9.6,
+      # and ESPHome picks the right call for its LVGL version. Showing a visible widget again does nothing.
+      - lvgl.widget.show: doorbell_video
       - lambda: |-
           id(doorbell_frames)++;
           id(doorbell_errors) = 0;
           id(doorbell_last_frame) = millis();
-          if (lv_obj_has_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN))
-            lv_obj_remove_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN);
           // the wait as you see it: from opening the page to the first frame
           if (id(doorbell_open_ms) != 0) {
             ESP_LOGI("doorbell", "First frame %u ms after opening the page",
@@ -113,6 +114,9 @@ script:
       - lvgl.label.update:
           id: doorbell_title
           text: "Someone rang the bell"
+      - lvgl.label.update:
+          id: doorbell_at
+          text: "at"
       - script.execute: doorbell_set_time
       - script.execute: doorbell_show
 
@@ -126,6 +130,9 @@ script:
       - lvgl.label.update:
           id: doorbell_title
           text: "Live view"
+      - lvgl.label.update:
+          id: doorbell_at
+          text: "opened at"
       - script.execute: doorbell_set_time
       - script.execute: doorbell_show
 
@@ -149,21 +156,33 @@ script:
             not:
               lvgl.page.is_showing: doorbell_page
           then:
-            - lambda: |-
-                // Already running (prewarm.yaml) with a frame from less than 1 s ago: show it at once.
-                // Otherwise no old picture until the first new one has arrived.
-                const uint32_t last = id(doorbell_stream).get_last_shown();
-                id(doorbell_frames) = 0;
-                if (id(doorbell_stream).is_running() && last != 0 && millis() - last < 1000) {
-                  ESP_LOGI("doorbell", "Stream was already running: picture at once (last frame %u ms ago)",
-                           (unsigned) (millis() - last));
-                  id(doorbell_open_ms) = 0;
-                  lv_label_set_text(id(doorbell_status), "Live");
-                } else {
-                  lv_obj_add_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN);
-                  lv_label_set_text(id(doorbell_status), "connecting...");
-                  id(doorbell_open_ms) = millis();
-                }
+            - globals.set:
+                id: doorbell_frames
+                value: "0"
+            - if:
+                # Already running (prewarm.yaml) with a frame from less than 1 s ago: show it at once.
+                condition:
+                  lambda: |-
+                    const uint32_t last = id(doorbell_stream).get_last_shown();
+                    return id(doorbell_stream).is_running() && last != 0 && millis() - last < 1000;
+                then:
+                  - logger.log:
+                      tag: doorbell
+                      format: "Stream was already running: picture at once (last frame %u ms ago)"
+                      args: ['(unsigned) (millis() - id(doorbell_stream).get_last_shown())']
+                  - globals.set:
+                      id: doorbell_open_ms
+                      value: "0"
+                  - lvgl.label.update:
+                      id: doorbell_status
+                      text: "Live"
+                # Otherwise no old picture until the first new one has arrived.
+                else:
+                  - lvgl.widget.hide: doorbell_video
+                  - lvgl.label.update:
+                      id: doorbell_status
+                      text: "connecting..."
+                  - lambda: 'id(doorbell_open_ms) = millis();'
             - lvgl.page.show:
                 id: doorbell_page
                 animation: MOVE_LEFT
@@ -295,7 +314,8 @@ interval:
                 if (id(doorbell_last_frame) != 0 && since < 5000) {
                   lv_label_set_text_fmt(id(doorbell_status), "Live: %.0f fps%s", n / 5.0f,
                                         id(doorbell_via_ha) ? " (via HA)" : "");
-                } else if (lv_obj_has_flag(id(doorbell_video), LV_OBJ_FLAG_HIDDEN)) {
+                } else if (id(doorbell_open_ms) != 0) {
+                  // still waiting for the first frame since the page opened (the picture is hidden)
                   lv_label_set_text(id(doorbell_status), "connecting...");
                 } else {
                   lv_label_set_text(id(doorbell_status), "no new picture");
@@ -436,6 +456,7 @@ lvgl:
                               text_color: 0x8A94A3
                               text: "Someone rang the bell"
                     - label:
+                        id: doorbell_at
                         text_font: montserrat_18
                         text_color: 0x8A94A3
                         text: "at"

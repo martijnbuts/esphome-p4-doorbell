@@ -63,12 +63,18 @@ The limit is the LVGL refresh of the 640×480 canvas, not the network or the dec
 
 With a go2rtc `preload` the first frame is on the screen 0.13 s after the page opens (7.7 s
 without). Details, how to measure and ideas to make it faster:
-**[docs/PERFORMANCE.md](docs/PERFORMANCE.md)**.
+**[docs/PERFORMANCE.md](docs/PERFORMANCE.md)**. It also covers a known ESP32-P4 risk: the hardware
+JPEG decoder and the PPA share the DMA2D controller, which can hang under load
+([DMA2D: JPEG decoder and PPA](docs/PERFORMANCE.md#dma2d-jpeg-decoder-and-ppa)).
 
 ## Requirements
 
-ESP32-P4 with PSRAM, ESPHome 2026.11.0-dev or newer (ESP-IDF 5.5 or 6.0, LVGL 9),
+ESP32-P4 with PSRAM, ESPHome 2026.11.0-dev or newer (ESP-IDF 5.5, 6.0 or 6.1; LVGL 9.5 or 9.6),
 Home Assistant with the go2rtc add-on for the MJPEG stream and the audio.
+
+Checked on 19 October 2026 against ESPHome dev (2026.11.0-dev: LVGL 9.6, recommended ESP-IDF 5.5.6),
+ESP-IDF 6.1.0, go2rtc 1.9.14 and Home Assistant 2026.10.1. The configuration also validates with
+ESPHome 2026.10.0b5 (LVGL 9.5).
 
 ## Credits
 
