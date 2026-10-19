@@ -1,6 +1,6 @@
 # Live Reolink doorbell video and audio on an ESP32-P4 display
 
-11 October 2026, updated 12 October 2026 · Martijn Buts
+11 October 2026, updated 19 October 2026 · Martijn Buts
 
 ## What you build
 
@@ -10,7 +10,7 @@ When someone rings the doorbell, an ESP32-P4 display opens a page with the live 
 
 The display opens one MJPEG connection to go2rtc; Home Assistant sends the ring and plays the audio.
 
-Written for: a Reolink D340P (any Reolink with an RTSP sub-stream in Home Assistant works), a Waveshare display with an ESP32-P4 and PSRAM (1024×600, LVGL), Home Assistant OS 2026.10 with the go2rtc add-on 1.9.14, ESPHome 2026.11.0-dev and a MikroTik router as the firewall example. All code is in the repository [martijnbuts/esphome-p4-doorbell](https://github.com/martijnbuts/esphome-p4-doorbell).
+Written for: a Reolink D340P (any Reolink with an RTSP sub-stream in Home Assistant works), a Waveshare display with an ESP32-P4 and PSRAM (1024×600, LVGL), Home Assistant OS 2026.10.1 with the go2rtc add-on 1.9.14, ESPHome 2026.11.0-dev (checked again on 19 October 2026) and a MikroTik router as the firewall example. All code is in the repository [martijnbuts/esphome-p4-doorbell](https://github.com/martijnbuts/esphome-p4-doorbell).
 
 ## What you need
 
@@ -19,10 +19,10 @@ You need a Reolink camera in Home Assistant, the go2rtc add-on and an ESP32-P4 d
 | Part | Requirement | Why |
 | --- | --- | --- |
 | Reolink doorbell or camera | Added with the Reolink integration; a sub-stream of 640×480 | Home Assistant's built-in go2rtc serves its RTSP stream on 127.0.0.1:18554 |
-| Home Assistant | HA OS or Supervised (add-ons); tested on 2026.10 | Runs the go2rtc add-on and converts the audio for the display |
+| Home Assistant | HA OS or Supervised (add-ons); tested on 2026.10.1 | Runs the go2rtc add-on and converts the audio for the display |
 | go2rtc add-on | From the AlexxIT add-on repository; tested on 1.9.14 | Turns the RTSP stream into MJPEG and AAC, behind a password |
-| ESP32-P4 board with display | PSRAM (the frame buffers take about 1.5 MB), Wi-Fi, LVGL | The P4 has a hardware JPEG decoder: 5–10 ms per frame |
-| ESPHome | 2026.11.0-dev with ESP-IDF 5.5 or 6.0 (both tested) | The component uses the LVGL 9 canvas and the ESP-IDF JPEG driver |
+| ESP32-P4 board with display | PSRAM (the frame buffers take about 1.5 MB), Wi-Fi, LVGL; the board in ESPHome must match the chip revision (below v3.0: esp32-p4-evboard, v3.0 and newer: esp32-p4\_r3-evboard) | The P4 has a hardware JPEG decoder: 5–10 ms per frame |
+| ESPHome | 2026.11.0-dev with ESP-IDF 5.5, 6.0 or 6.1 (all three tested) | The component uses the LVGL 9 canvas and the ESP-IDF JPEG driver |
 | Media player on the display | An ESPHome `speaker` media player with an announcement pipeline | The doorbell audio plays as an announcement and pauses music |
 | Router | Firewall rules between VLANs (the example is MikroTik RouterOS 7) | The display sits in an IoT VLAN and may only reach go2rtc |
 
@@ -187,7 +187,7 @@ Do you have the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B? Then start from the compl
 
 The page uses two LVGL frame buffers of 640×480 in PSRAM (about 1.2 MB) and a JPEG buffer of 256 KB. They are made the first time the page opens and stay for the next time.
 
-Optional: does your doorbell have a person (or motion) sensor in Home Assistant? Then add `example/prewarm.yaml` as a second file of the package, with the vars `presence_sensor: <presence-sensor>` and `prewarm_hold: 30s` (the complete example shows how). It starts the stream invisibly when the sensor turns on, so the picture is there at once when someone rings, and stops it 30 s after the sensor turned off. Do the go2rtc `preload` from Step 1 first: a person sensor usually fires only 1–3 s before the ring.
+Optional: does your doorbell have a person (or motion) sensor in Home Assistant? Then add `example/prewarm.yaml` as a second file of the package, with the vars `presence_sensor: <presence-sensor>` and `prewarm_hold: 30s` (the complete example shows how). It starts the stream invisibly when the sensor turns on, so the picture is there at once when someone rings, and stops it 30 s after the sensor turned off. Do the go2rtc `preload` from Step 1 first: a person sensor usually fires only 1–3 s before the ring. The package also adds a button Prewarm doorbell stream in Home Assistant that does the same for 30 s: handy to test, or for an automation (for example when the garden gate opens).
 
 Control: press **Open doorbell camera** in Home Assistant and open the logs of the device. Every 5 s you should see a line like `go2rtc: 50 frames in 5 s, last frame 6 ms, 0 skipped`.
 
@@ -235,7 +235,9 @@ What made the difference:
 
 - **No `clip_corner`** (rounded corners) on the card around the picture: about 10 ms per frame. The package no longer uses it.
 - **No LVGL rotation**: `rotation: 180` turned every refresh with the PPA into an extra 1.2 MB buffer: 13 ms per frame. If your display hangs upside down, turn the display around instead and remove the rotation; touch follows by itself.
-- **ESP-IDF 6.0 and LVGL drawing the picture with the PPA**: 8 ms per frame. With ESP-IDF 6.0 (`esp32: framework: version: 6.0.1`) ESPHome turns on the LVGL PPA draw unit for fills; drawing images with it is a separate LVGL option. Add it as a build flag: `esphome: build_flags: [-DLV_USE_PPA_IMG=1]`.
+- **ESP-IDF 6.x and LVGL drawing the picture with the PPA**: 8 ms per frame. With ESP-IDF 6.0 or newer (`esp32: framework: version: 6.1.0`; measured with 6.0.1) ESPHome turns on the LVGL PPA draw unit for fills; drawing images with it is a separate LVGL option. Add it as a build flag: `esphome: build_flags: [-DLV_USE_PPA_IMG=1]`.
+
+One known risk on the ESP32-P4: the hardware JPEG decoder and the PPA share the 2D-DMA controller, which can hang under load ([esp-idf#19108](https://github.com/espressif/esp-idf/issues/19108), open on 19 October 2026). With `LV_USE_PPA_IMG` both run for every frame. PERFORMANCE.md describes it and two ways to keep them apart.
 
 The start-up is set by go2rtc, not by the display: 7.7 s from opening the page to the first frame without `preload`, 0.13 s with it.
 
