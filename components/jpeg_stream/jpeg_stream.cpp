@@ -17,7 +17,7 @@
 
 namespace esphome::jpeg_stream {
 
-static const char *const TAG = "jpeg_stream";
+ESPHOME_LOG_TAG(TAG, "jpeg_stream");
 
 static constexpr uint32_t TASK_STACK_SIZE = 8192;  // TLS handshakes run in this task
 static constexpr UBaseType_t TASK_PRIORITY = 1;     // same as the main loop task

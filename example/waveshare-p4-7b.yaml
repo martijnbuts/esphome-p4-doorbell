@@ -8,15 +8,20 @@ esphome:
   friendly_name: P4 doorbell
 
 esp32:
+  # esp32-p4-evboard = ESP32-P4 engineering sample (chip revision below v3.0, like the tested board:
+  # v1.3). The boot log shows "chip revision: vX.Y"; from v3.0 on use board: esp32-p4_r3-evboard.
+  # The two builds are not interchangeable (ESP-IDF 6.1 even defaults to v3.0).
   board: esp32-p4-evboard
   variant: esp32p4
   flash_size: 32MB
   cpu_frequency: 360MHz
   framework:
     type: esp-idf
-    # Optional, faster drawing (docs/PERFORMANCE.md): with ESP-IDF 6.0 LVGL uses the PPA. Add
-    # `version: 6.0.1` here and, under esphome:, `build_flags: [-DLV_USE_PPA_IMG=1]` so that LVGL
-    # also draws the doorbell picture with the PPA (LVGL refresh 28 -> 21 ms per frame).
+    # Optional, faster drawing (docs/PERFORMANCE.md): with ESP-IDF 6.x LVGL uses the PPA. Add
+    # `version: 6.1.0` here (measured with 6.0.1; the author's display runs 6.1.0 since 14 October 2026)
+    # and, under esphome:, `build_flags: [-DLV_USE_PPA_IMG=1]` so that LVGL also draws the doorbell
+    # picture with the PPA (LVGL refresh 28 -> 21 ms per frame). Without `version` ESPHome uses its
+    # recommended ESP-IDF (5.5.6 since 17 October 2026), and LVGL draws in software.
     advanced:
       execute_from_psram: true
       # needed for OTA with 32 MB flash

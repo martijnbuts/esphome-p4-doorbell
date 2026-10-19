@@ -14,6 +14,19 @@
 #   presence_sensor:  binary_sensor in Home Assistant that turns on before someone rings,
 #                     e.g. binary_sensor.front_door_person (Reolink person detection)
 #   prewarm_hold:     how long to keep the stream after the sensor turned off, e.g. 30s
+#
+# It also adds a button "Prewarm doorbell stream" in Home Assistant: it starts the stream for
+# ${prewarm_hold}, as if the sensor turned on and off. Handy to test, or for an automation in Home
+# Assistant (for example when the garden gate opens).
+
+button:
+  - platform: template
+    name: "Prewarm doorbell stream"
+    icon: mdi:play-network
+    entity_category: config
+    on_press:
+      - script.execute: doorbell_prewarm
+      - script.execute: doorbell_prewarm_stop
 
 binary_sensor:
   - platform: homeassistant
