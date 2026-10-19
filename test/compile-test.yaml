@@ -1,0 +1,223 @@
+# TIJDELIJK (19-10-2026): compileertest van github.com/martijnbuts/esphome-p4-doorbell, wordt weer verwijderd.
+# Complete example for the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024x600).
+# A simple home page with a video button, the doorbell page from doorbell.yaml and a
+# media player for the doorbell audio. Replace the values between < > and put
+# wifi_ssid, wifi_password, api_encryption_key and go2rtc_password in secrets.yaml.
+
+esphome:
+  name: zz-p4-doorbell-test
+  friendly_name: zz P4 doorbell test (tijdelijk, compileertest)
+  build_flags:
+    - -DLV_USE_PPA_IMG=1
+
+esp32:
+  # esp32-p4-evboard = ESP32-P4 engineering sample (chip revision below v3.0, like the tested board:
+  # v1.3). The boot log shows "chip revision: vX.Y"; from v3.0 on use board: esp32-p4_r3-evboard.
+  # The two builds are not interchangeable (ESP-IDF 6.1 even defaults to v3.0).
+  board: esp32-p4-evboard
+  variant: esp32p4
+  flash_size: 32MB
+  cpu_frequency: 360MHz
+  framework:
+    type: esp-idf
+    version: 6.1.0
+    # Optional, faster drawing (docs/PERFORMANCE.md): with ESP-IDF 6.x LVGL uses the PPA. Add
+    # `version: 6.1.0` here (measured with 6.0.1; the author's display runs 6.1.0 since 14 October 2026)
+    # and, under esphome:, `build_flags: [-DLV_USE_PPA_IMG=1]` so that LVGL also draws the doorbell
+    # picture with the PPA (LVGL refresh 28 -> 21 ms per frame). Without `version` ESPHome uses its
+    # recommended ESP-IDF (5.5.6 since 17 October 2026), and LVGL draws in software.
+    advanced:
+      execute_from_psram: true
+      # needed for OTA with 32 MB flash
+      enable_idf_experimental_features: true
+      # -O2 instead of -Os: faster LVGL drawing
+      compiler_optimization: PERF
+
+psram:
+  mode: hex
+  speed: 200MHz
+
+logger:
+  hardware_uart: UART0
+
+api:
+  encryption:
+    key: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="  # dummy, alleen compileertest
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: "compile-test"
+  password: "compile-test-only"
+  use_psram: true
+  power_save_mode: none
+
+# Wi-Fi through the ESP32-C6 co-processor on the board
+esp32_hosted:
+  variant: ESP32C6
+  reset_pin: GPIO54
+  cmd_pin: GPIO19
+  clk_pin: GPIO18
+  d0_pin: GPIO14
+  d1_pin: GPIO15
+  d2_pin: GPIO16
+  d3_pin: GPIO17
+  active_high: true
+  use_psram: true
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# The jpeg_stream component from this repository
+external_components:
+  - source: github://martijnbuts/esphome-p4-doorbell@update-2026-10-19
+    components: [jpeg_stream]
+
+packages:
+  doorbell:
+    url: https://github.com/martijnbuts/esphome-p4-doorbell
+    ref: update-2026-10-19
+    files:
+      - path: example/doorbell.yaml
+        vars:
+          doorbell_sensor: binary_sensor.doorbell_visitor          # e.g. binary_sensor.doorbell_visitor
+          camera_entity: camera.doorbell_fluent              # e.g. camera.doorbell_fluent
+          ha_url: http://192.168.1.10:8123                            # e.g. http://192.168.1.10:8123
+          go2rtc_url: http://192.168.1.10:1984
+          go2rtc_user: p4display
+          go2rtc_password: abc123    # letters and digits only
+          go2rtc_stream: doorbell_mjpeg
+          go2rtc_audio: doorbell
+          media_player_id: display_media_player
+          display_media_player: media_player.p4_doorbell_media_player # e.g. media_player.p4_doorbell_media_player
+          time_id: ha_time
+          home_page: home_page
+          close_after: 90s
+      # Optional: start the stream when someone is at the door, so the picture is there at once
+      # when they ring. Remove these lines if the doorbell has no person (or motion) sensor.
+      - path: example/prewarm.yaml
+        vars:
+          presence_sensor: binary_sensor.doorbell_person          # e.g. binary_sensor.doorbell_person
+          prewarm_hold: 30s
+
+# ─── Display 1024x600 (MIPI-DSI) + GT911 touch ───────────────────────────────
+esp_ldo:
+  - channel: 3
+    voltage: 2.5V
+
+display:
+  - platform: mipi_dsi
+    model: WAVESHARE-ESP32-P4-WIFI6-TOUCH-LCD-7B
+    id: main_display
+    reset_pin:
+      number: 33
+    update_interval: never
+    auto_clear_enabled: false
+
+output:
+  - platform: ledc
+    id: backlight_output
+    pin: GPIO32
+    inverted: true
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    output: backlight_output
+    name: Display Backlight
+    id: display_backlight
+    restore_mode: ALWAYS_ON
+
+i2c:
+  - id: bus_a
+    sda: GPIO07
+    scl: GPIO08
+    frequency: 400kHz
+
+touchscreen:
+  - platform: gt911
+    id: main_touchscreen
+    i2c_id: bus_a
+    address: 0x5D
+    reset_pin: GPIO23
+    transform:
+      mirror_x: true
+      mirror_y: true
+
+# ─── Audio: ES8311 DAC -> NS4150B amplifier (GPIO53) -> speaker ─────────────
+i2s_audio:
+  - id: board_i2s
+    i2s_mclk_pin: GPIO13
+    i2s_bclk_pin: GPIO12
+    i2s_lrclk_pin: GPIO10
+
+audio_dac:
+  - platform: es8311
+    id: board_dac
+    i2c_id: bus_a
+    address: 0x18
+    bits_per_sample: 16bit
+    sample_rate: 48000
+
+speaker:
+  - platform: i2s_audio
+    id: board_speaker
+    i2s_audio_id: board_i2s
+    i2s_dout_pin: GPIO9
+    dac_type: external
+    audio_dac: board_dac
+    channel: mono
+    sample_rate: 48000
+    bits_per_sample: 16bit
+    buffer_duration: 100ms
+
+switch:
+  - platform: gpio
+    pin: GPIO53
+    id: amplifier
+    name: "Audio Amplifier"
+    restore_mode: ALWAYS_OFF
+
+media_player:
+  - platform: speaker
+    id: display_media_player
+    name: "Media Player"
+    announcement_pipeline:
+      speaker: board_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+    on_announcement:
+      - switch.turn_on: amplifier
+    on_idle:
+      - switch.turn_off: amplifier
+
+# ─── Home page with the video button ─────────────────────────────────────────
+lvgl:
+  displays: main_display
+  touchscreens: main_touchscreen
+  buffer_size: 100%
+  pages:
+    - id: home_page
+      bg_color: 0x0B0F14
+      bg_opa: COVER
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 40
+            text_font: montserrat_40
+            text_color: 0xE8ECF1
+            text: "Home"
+        - button:
+            align: CENTER
+            width: 320
+            height: 120
+            on_click:
+              - script.execute: doorbell_live
+            widgets:
+              - label:
+                  align: CENTER
+                  text_font: montserrat_28
+                  text: "Front door"
