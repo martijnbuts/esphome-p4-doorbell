@@ -1,0 +1,156 @@
+# Optional: talk back through the doorbell from the display.
+# Adds a "Talk" button to the doorbell page (tap to start, tap to stop). The display's microphone
+# then plays on the doorbell's speaker. Needs doorbell.yaml and a microphone on the display.
+#
+#   - The go2rtc_talkback component (components/go2rtc_talkback) serves the microphone as a WAV
+#     on its own port, only to the go2rtc host, and asks go2rtc to play it on the doorbell:
+#     POST /api/ffmpeg?dst=<go2rtc_audio>&live=http://<display>:<talk_port>/talk.wav.
+#     go2rtc's ffmpeg converts it to the doorbell's codec and sends it over the RTSP backchannel.
+#   - The go2rtc stream ${go2rtc_audio} needs that backchannel: in example/go2rtc.yaml the stream
+#     reads Home Assistant's go2rtc with ?backchannel=1. Home Assistant 2026.11 uses the same
+#     backchannel for its own two-way audio (Labs: "Two-way audio").
+#   - While you talk, the doorbell audio on the display stops; otherwise the doorbell hears itself
+#     (feedback). It comes back when you stop. Talking stops by itself after ${talk_max}.
+#   - The firewall must let the go2rtc host reach the display on tcp ${talk_port} (the manual).
+#
+# Include it next to doorbell.yaml with these vars:
+#   microphone_id:    ESPHome id of the display's microphone (16-bit)
+#   mic_channel:      channel of that microphone to use (0 for a mono or left microphone)
+#   mic_gain:         gain factor 1-64 on top of the microphone's own gain, e.g. 4
+#   go2rtc_url:       http://<ha-ip>:1984 (the same as in doorbell.yaml)
+#   go2rtc_host:      IP address of the go2rtc host; only it may fetch the microphone
+#   go2rtc_user:      user name from go2rtc.yaml
+#   go2rtc_password:  password from go2rtc.yaml (use !secret)
+#   go2rtc_audio:     go2rtc stream with the doorbell and its backchannel (doorbell)
+#   talk_port:        TCP port on the display for the microphone, e.g. 8555
+#   talk_max:         talking stops by itself after this time, e.g. 120s
+#   media_player_id:  ESPHome id of the display's speaker media player
+#   display_media_player: the same media player as Home Assistant entity
+#
+# Has a wake word on the same microphone? Stop it while talking, or "Okay Nabu" in a sentence
+# starts the voice assistant: add micro_wake_word.stop to doorbell_talk_start (before
+# go2rtc_talkback.start) and micro_wake_word.start to on_stop below.
+#
+# The button floats over the doorbell page, just above "Back" in the info card (page padding
+# 12 px, card padding 16 px, Back 96 px high), so doorbell.yaml needs no change.
+
+font:
+  - file: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: doorbell_talk_icon
+    size: 32
+    bpp: 4
+    glyphs:
+      - "\U000F036C"   # microphone
+
+go2rtc_talkback:
+  id: doorbell_talkback
+  microphone:
+    microphone: ${microphone_id}
+    channels: ${mic_channel}
+    gain_factor: ${mic_gain}
+  url: ${go2rtc_url}
+  username: ${go2rtc_user}
+  password: ${go2rtc_password}
+  stream: ${go2rtc_audio}
+  port: ${talk_port}
+  allowed_ips:
+    - ${go2rtc_host}
+  max_duration: ${talk_max}
+  on_streaming:
+    - lvgl.label.update:
+        id: doorbell_talk_text
+        text: "Stop talking"
+  on_stop:
+    - lvgl.widget.update:
+        id: doorbell_talk_button
+        state:
+          checked: false
+    - lvgl.label.update:
+        id: doorbell_talk_text
+        text: "Talk"
+    # page still open: doorbell audio back on
+    - if:
+        condition:
+          lvgl.page.is_showing: doorbell_page
+        then:
+          - homeassistant.action:
+              action: media_player.play_media
+              data:
+                entity_id: ${display_media_player}
+                media_content_id: "http://127.0.0.1:1984/api/stream.aac?src=${go2rtc_audio}"
+                media_content_type: music
+                announce: "true"
+  # comes after on_stop, so the message stays until the next tap
+  on_error:
+    - lvgl.label.update:
+        id: doorbell_talk_text
+        text: "Failed"
+
+script:
+  # The "Talk" button: tap to start, tap to stop
+  - id: doorbell_talk_toggle
+    then:
+      - if:
+          condition:
+            go2rtc_talkback.is_active: doorbell_talkback
+          then:
+            - go2rtc_talkback.stop: doorbell_talkback
+          else:
+            - script.execute: doorbell_talk_start
+
+  - id: doorbell_talk_start
+    mode: single
+    then:
+      - lvgl.widget.update:
+          id: doorbell_talk_button
+          state:
+            checked: true
+      - lvgl.label.update:
+          id: doorbell_talk_text
+          text: "Connecting..."
+      # doorbell audio off, otherwise the doorbell hears itself (feedback)
+      - if:
+          condition:
+            media_player.is_announcing: ${media_player_id}
+          then:
+            - media_player.stop:
+                id: ${media_player_id}
+                announcement: true
+      - go2rtc_talkback.start: doorbell_talkback
+      # keep the page open while talking
+      - script.execute: doorbell_auto_close
+
+  # Closing the page stops talking too. This runs at the end of doorbell_close, when the page
+  # is already gone, so on_stop does not turn the doorbell audio back on.
+  - id: !extend doorbell_close
+    then:
+      - go2rtc_talkback.stop: doorbell_talkback
+
+lvgl:
+  pages:
+    - id: !extend doorbell_page
+      widgets:
+        - button:
+            id: doorbell_talk_button
+            floating: true
+            align: BOTTOM_RIGHT
+            x: -16
+            y: -120
+            width: 292
+            height: 96
+            checked:
+              bg_color: 0xC62828
+            on_click:
+              - script.execute: doorbell_talk_toggle
+            widgets:
+              - label:
+                  align: LEFT_MID
+                  x: 20
+                  text_font: doorbell_talk_icon
+                  text: "\U000F036C"
+              - label:
+                  id: doorbell_talk_text
+                  align: LEFT_MID
+                  x: 64
+                  text_font: montserrat_28
+                  text: "Talk"

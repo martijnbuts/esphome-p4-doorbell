@@ -6,7 +6,8 @@ Live Reolink doorbell video and audio on an ESP32-P4 LVGL display with ESPHome.
 
 When someone rings, the display opens a page with the live picture of the doorbell at
 10 frames per second with under 1 s delay, and plays the doorbell audio on its speaker.
-A video button shows the picture without a ring.
+A video button shows the picture without a ring, and an optional **Talk** button sends the
+display's microphone to the doorbell's speaker.
 
 ![Setup](docs/setup.png)
 
@@ -16,10 +17,12 @@ A video button shows the picture without a ring.
 | --- | --- |
 | [`components/jpeg_stream`](components/jpeg_stream) | ESPHome external component: receives an MJPEG stream (or repeated JPEG snapshots) in a background task and decodes every frame with the ESP32-P4 hardware JPEG decoder onto an LVGL canvas |
 | [`components/lvgl_screenshot`](components/lvgl_screenshot) | ESPHome external component: shows the LVGL screen as a camera in Home Assistant, encoded with the ESP32-P4 hardware JPEG encoder, only when Home Assistant asks for a picture |
+| [`components/go2rtc_talkback`](components/go2rtc_talkback) | ESPHome external component: talk back through a camera; serves the microphone as a WAV and lets go2rtc play it on the camera's two-way audio channel |
 | [`example/doorbell.yaml`](example/doorbell.yaml) | Package with the doorbell page, the scripts, the audio and the fallback to Home Assistant snapshots |
 | [`example/waveshare-p4-7b.yaml`](example/waveshare-p4-7b.yaml) | Complete device configuration for the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B |
 | [`example/go2rtc.yaml`](example/go2rtc.yaml) | Configuration for the go2rtc add-on (MJPEG + AAC from the camera's RTSP stream) |
 | [`example/prewarm.yaml`](example/prewarm.yaml) | Optional: start the stream when a presence sensor (e.g. person detection) turns on, so the picture is there at once when someone rings |
+| [`example/talkback.yaml`](example/talkback.yaml) | Optional: a **Talk** button on the doorbell page; the display's microphone plays on the doorbell's speaker (built, not yet tested with sound) |
 | [`example/measure.yaml`](example/measure.yaml) | Measurement package: main loop time per component, CPU per task, an A/B switch |
 | [`docs/`](docs) | The manual as Markdown and PDF, and the setup diagram |
 

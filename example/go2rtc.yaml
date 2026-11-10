@@ -7,6 +7,9 @@
 #                   http://<ha-ip>:1984/api/stream.mjpeg?src=doorbell_mjpeg
 #   Audio:          http://127.0.0.1:1984/api/stream.aac?src=doorbell, played by Home Assistant
 #                   on the display's media player. Requests from 127.0.0.1 need no password.
+#   Talk back (example/talkback.yaml): add ?backchannel=1 to the doorbell stream, so Home
+#                   Assistant's go2rtc also passes the doorbell's two-way audio channel:
+#                   doorbell: rtsp://127.0.0.1:18554/<stream-name>?backchannel=1
 #   preload:        keeps the MJPEG conversion running, so the first frame is on the display in
 #                   about 0.1 s instead of about 8 s (ffmpeg start + waiting for a key frame).
 #                   Cost about 0.5 % CPU on the tested Home Assistant host (add-on statistics). Leave it out

@@ -68,7 +68,7 @@ time:
 # The jpeg_stream component from this repository
 external_components:
   - source: github://martijnbuts/esphome-p4-doorbell@main
-    components: [jpeg_stream, lvgl_screenshot]
+    components: [jpeg_stream, lvgl_screenshot, go2rtc_talkback]
 
 # Optional: the display as a camera in Home Assistant (see the manual). Remove this block and
 # lvgl_screenshot above if you don't need it.
@@ -102,6 +102,22 @@ packages:
         vars:
           presence_sensor: <presence-sensor>          # e.g. binary_sensor.doorbell_person
           prewarm_hold: 30s
+      # Optional: a "Talk" button on the doorbell page; the display's microphone plays on the
+      # doorbell's speaker (go2rtc two-way audio). Remove these lines if you don't need it.
+      - path: example/talkback.yaml
+        vars:
+          microphone_id: board_microphone
+          mic_channel: "0"
+          mic_gain: "4"
+          go2rtc_url: http://<ha-ip>:1984
+          go2rtc_host: <ha-ip>
+          go2rtc_user: p4display
+          go2rtc_password: !secret go2rtc_password
+          go2rtc_audio: doorbell
+          talk_port: "8555"
+          talk_max: 120s
+          media_player_id: display_media_player
+          display_media_player: <display-media-player>
 
 # ─── Display 1024x600 (MIPI-DSI) + GT911 touch ───────────────────────────────
 esp_ldo:
@@ -148,6 +164,7 @@ touchscreen:
       mirror_y: true
 
 # ─── Audio: ES8311 DAC -> NS4150B amplifier (GPIO53) -> speaker ─────────────
+#            ES7210 ADC <- 2 microphones (MIC1 left, MIC2 right), for talkback.yaml
 i2s_audio:
   - id: board_i2s
     i2s_mclk_pin: GPIO13
@@ -161,6 +178,25 @@ audio_dac:
     address: 0x18
     bits_per_sample: 16bit
     sample_rate: 48000
+
+audio_adc:
+  - platform: es7210
+    id: board_adc
+    i2c_id: bus_a
+    address: 0x40
+    bits_per_sample: 16bit
+    sample_rate: 16000
+    mic_gain: 30db
+
+microphone:
+  - platform: i2s_audio
+    id: board_microphone
+    i2s_audio_id: board_i2s
+    i2s_din_pin: GPIO11
+    adc_type: external
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: stereo       # both microphones; talkback.yaml uses channel 0 (MIC1)
 
 speaker:
   - platform: i2s_audio
