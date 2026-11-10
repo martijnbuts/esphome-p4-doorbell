@@ -6,8 +6,9 @@ When started, the component
   2. asks go2rtc to play that WAV on the stream's two-way audio channel:
      POST <url>/api/ffmpeg?dst=<stream>&live=http://<this device>:<port>/talk.wav
      go2rtc's ffmpeg fetches the WAV and converts it to the codec the camera asks for
-     (go2rtc adds #audio=auto). For an RTSP camera the stream needs its backchannel, e.g.
-     rtsp://...#backchannel=1, or ?backchannel=1 when it comes from another go2rtc.
+     (go2rtc adds #audio=auto). Use a go2rtc stream of its own for this, straight to the camera:
+     go2rtc opens it only while talking. An always-on stream with a backchannel makes go2rtc
+     reconnect the camera when talking starts, and can keep a Reolink in two-way mode.
 Stop closes the WAV stream and asks go2rtc to stop (POST <url>/api/streams?dst=<stream>&src=).
 
 Serving and the go2rtc calls run in their own tasks: go2rtc only answers the POST after ffmpeg

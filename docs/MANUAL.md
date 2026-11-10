@@ -219,15 +219,17 @@ Control: open the page and look at the media player in Home Assistant. It should
 
 This step adds a **Talk** button to the doorbell page: tap it and the display's microphone plays on the doorbell's speaker, tap again to stop. Built and installed on 10 November 2026; **not yet tested with sound at the door**, so the codec and the volume are still open (see the end of this section).
 
-How it works: the `go2rtc_talkback` component serves the microphone as a WAV on its own port, only to the go2rtc host, and asks go2rtc to play it on the doorbell (`POST /api/ffmpeg?dst=doorbell&live=http://<display-ip>:8555/talk.wav`). go2rtc's ffmpeg converts it to the codec the doorbell asks for and sends it over the RTSP backchannel. Home Assistant 2026.11 uses the same backchannel for its own two-way audio in the browser (Labs: *Two-way audio*); the Reolink integration must use RTSP for that.
+How it works: the `go2rtc_talkback` component serves the microphone as a WAV on its own port, only to the go2rtc host, and asks go2rtc to play it on the doorbell (`POST /api/ffmpeg?dst=doorbell_talk&live=http://<display-ip>:8555/talk.wav`). go2rtc's ffmpeg converts it to the codec the doorbell asks for (a Reolink backchannel takes only G.711: PCMU or PCMA) and sends it over the RTSP backchannel. Home Assistant 2026.11 does the same in the browser (Labs: *Two-way audio*).
 
-1. Check that the doorbell can receive audio: *Settings → Devices & services → Reolink*, **Download diagnostics**, and look for `two_way_audio` under `capabilities` (the D340P with firmware v3.0.0.6460 has it). The integration's protocol must be RTSP (*Configure* in the integration).
-2. Let go2rtc ask Home Assistant's go2rtc for the backchannel: add `?backchannel=1` to the `doorbell` stream in `/config/go2rtc.yaml` and restart the add-on:
+1. Check that the doorbell can receive audio: *Settings → Devices & services → Reolink*, **Download diagnostics**, and look for `two_way_audio` under `capabilities` (the D340P with firmware v3.0.0.6460 has it).
+2. Add a go2rtc stream only for talking, straight to the doorbell, in `/config/go2rtc.yaml`, and restart the add-on:
 
    ```yaml
    streams:
-     doorbell: rtsp://127.0.0.1:18554/<stream-name>?backchannel=1
+     doorbell_talk: rtsp://<camera-user>:<camera-password>@<doorbell-ip>:554/h264Preview_01_sub
    ```
+
+   go2rtc opens this stream only while you talk and closes it 1 s after you stop, so the doorbell's backchannel is free again. Don't add `?backchannel=1` to the `doorbell` stream instead: that stream is always on (preload), go2rtc reconnects a camera session when a backchannel joins (the picture stalls for everyone), and an open backchannel keeps a Reolink in two-way mode, with the ring light blue and the chime silent ([go2rtc#1860](https://github.com/AlexxIT/go2rtc/issues/1860)). This stream needs the camera password in the add-on; it stays behind the go2rtc login.
 3. Let go2rtc reach the display on tcp 8555, the other way round from Step 2. MikroTik, run once, then move the rule above the IoT drop rule as in Step 2:
 
    ```
@@ -262,6 +264,7 @@ How it works: the `go2rtc_talkback` component serves the microphone as a WAV on 
              go2rtc_user: p4display
              go2rtc_password: !secret go2rtc_password
              go2rtc_audio: doorbell
+             go2rtc_talk: doorbell_talk
              talk_port: "8555"
              talk_max: 120s
              media_player_id: display_media_player
@@ -275,7 +278,7 @@ While you talk, the doorbell audio on the display stops, otherwise the doorbell 
 | `microphone` | required | Microphone source: `microphone`, `channels` (one), `gain_factor` (1–64) |
 | `url` | required | go2rtc API, `http://<ha-ip>:1984` |
 | `username`, `password` | none | go2rtc API login |
-| `stream` | required | go2rtc stream with the doorbell and its backchannel |
+| `stream` | required | go2rtc stream to play on; its camera must accept two-way audio |
 | `port` | `8555` | Port on the display where go2rtc's ffmpeg fetches the microphone (`/talk.wav`) |
 | `allowed_ips` | everyone | Who may fetch the microphone; set the go2rtc host |
 | `max_duration` | `60s` | Stop by itself after this time |
@@ -283,9 +286,9 @@ While you talk, the doorbell audio on the display stops, otherwise the doorbell 
 
 Actions `go2rtc_talkback.start` and `go2rtc_talkback.stop`; conditions `go2rtc_talkback.is_active` and `go2rtc_talkback.is_streaming`. The microphone is shared: a wake word on the same microphone keeps working, but stop it while talking, or a wake word in a sentence starts the voice assistant (the comment at the top of `talkback.yaml` shows how).
 
-Control: tap **Talk**. The button turns red and says *Stop talking* within about a second; the log shows `go2rtc is fetching the microphone (... ms after start)`. Speak and listen at the door. Tap again: the log shows `Stopped after ... ms: ... bytes sent`.
+Control: tap **Talk**. The button turns red and says *Stop talking* within about a second; the log shows `go2rtc is fetching the microphone (... ms after start)`. Speak and listen at the door. Tap again: the log shows `Stopped after ... ms: ... bytes sent`. Then ring the doorbell: the chime must sound and the ring light must not stay blue.
 
-Still open (10 November 2026): which codec the D340P wants on the backchannel (go2rtc picks it with `#audio=auto`), the delay, and the volume (`mic_gain`, and the doorbell's own speaker volume in the Reolink integration).
+Still open (10 November 2026): which codec the D340P picks (go2rtc chooses it with `#audio=auto`; other reports say PCMU on firmware v3.0.0.4662), the delay (others report 1–2 s with Reolink, also from the browser), and the volume (`mic_gain`, and *Speak volume* of the doorbell in the Reolink integration).
 
 ## Optional: screenshot of the display
 
@@ -413,7 +416,8 @@ These problems came up while building this.
 | `OTA with 32MB flash requires 'enable_idf_experimental_features'` | ESPHome rule for boards with 32 MB flash | Add `enable_idf_experimental_features: true` under `esp32: framework: advanced:` |
 | go2rtc web page asks for a login | The API password also protects the web page | Log in with the user name and password from `go2rtc.yaml` |
 | `'active_high' is a required option for [esp32_hosted]` | ESPHome 2026.10 still needs it; 2026.11 and newer ignore it and warn that it is deprecated | On ESPHome 2026.10 add `active_high: true` under `esp32_hosted:`; on 2026.11 and newer leave it out |
-| **Talk** shows *Failed* | go2rtc could not play the microphone: the stream has no backchannel (`?backchannel=1` missing, or the integration does not use RTSP), or go2rtc cannot reach the display on port 8555 | The log says which (`go2rtc refused to play (HTTP ...)`, `not reachable` or `closed the microphone stream`); check Step 2 and 3 of *Talk back* |
+| **Talk** shows *Failed* | go2rtc could not play the microphone: the talk stream is missing or its camera refuses two-way audio, or go2rtc cannot reach the display on port 8555 | The log says which (`go2rtc refused to play (HTTP ...)`, `not reachable` or `closed the microphone stream`); check Step 2 and 3 of *Talk back* |
+| Ring light stays blue, the chime is silent | A backchannel is still open, e.g. `?backchannel=1` on an always-on stream ([go2rtc#1860](https://github.com/AlexxIT/go2rtc/issues/1860)) | Talk only through the separate `doorbell_talk` stream; restart the go2rtc add-on to free it |
 | A whistle while talking | The doorbell hears its own speaker through the display | The package stops the doorbell audio while you talk; lower `mic_gain` or the doorbell's speaker volume |
 
 Don't need audio or more than 4 fps? Then the snapshot mode alone (`jpeg_stream` with the camera proxy URL of Home Assistant) works without go2rtc and without a firewall change.

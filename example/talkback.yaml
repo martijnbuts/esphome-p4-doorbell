@@ -4,11 +4,15 @@
 #
 #   - The go2rtc_talkback component (components/go2rtc_talkback) serves the microphone as a WAV
 #     on its own port, only to the go2rtc host, and asks go2rtc to play it on the doorbell:
-#     POST /api/ffmpeg?dst=<go2rtc_audio>&live=http://<display>:<talk_port>/talk.wav.
-#     go2rtc's ffmpeg converts it to the doorbell's codec and sends it over the RTSP backchannel.
-#   - The go2rtc stream ${go2rtc_audio} needs that backchannel: in example/go2rtc.yaml the stream
-#     reads Home Assistant's go2rtc with ?backchannel=1. Home Assistant 2026.11 uses the same
-#     backchannel for its own two-way audio (Labs: "Two-way audio").
+#     POST /api/ffmpeg?dst=<go2rtc_talk>&live=http://<display>:<talk_port>/talk.wav.
+#     go2rtc's ffmpeg converts it to the doorbell's codec (a Reolink backchannel takes only G.711,
+#     PCMU or PCMA) and sends it over the RTSP backchannel. Home Assistant 2026.11 does the same in
+#     the browser (Labs: "Two-way audio").
+#   - ${go2rtc_talk} is a go2rtc stream of its own, straight to the doorbell (example/go2rtc.yaml).
+#     go2rtc opens it only while you talk and closes it 1 s after; then the backchannel is free
+#     again. Don't add ?backchannel=1 to the always-on doorbell stream instead: go2rtc reconnects a
+#     camera session when a backchannel joins (the picture stalls), and an open backchannel keeps a
+#     Reolink in two-way mode (ring light stays blue, the chime stays silent; go2rtc issue #1860).
 #   - While you talk, the doorbell audio on the display stops; otherwise the doorbell hears itself
 #     (feedback). It comes back when you stop. Talking stops by itself after ${talk_max}.
 #   - The firewall must let the go2rtc host reach the display on tcp ${talk_port} (the manual).
@@ -21,7 +25,8 @@
 #   go2rtc_host:      IP address of the go2rtc host; only it may fetch the microphone
 #   go2rtc_user:      user name from go2rtc.yaml
 #   go2rtc_password:  password from go2rtc.yaml (use !secret)
-#   go2rtc_audio:     go2rtc stream with the doorbell and its backchannel (doorbell)
+#   go2rtc_audio:     go2rtc stream with the doorbell audio (doorbell, as in doorbell.yaml)
+#   go2rtc_talk:      go2rtc stream straight to the doorbell, only for talking (doorbell_talk)
 #   talk_port:        TCP port on the display for the microphone, e.g. 8555
 #   talk_max:         talking stops by itself after this time, e.g. 120s
 #   media_player_id:  ESPHome id of the display's speaker media player
@@ -51,7 +56,7 @@ go2rtc_talkback:
   url: ${go2rtc_url}
   username: ${go2rtc_user}
   password: ${go2rtc_password}
-  stream: ${go2rtc_audio}
+  stream: ${go2rtc_talk}
   port: ${talk_port}
   allowed_ips:
     - ${go2rtc_host}

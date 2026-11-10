@@ -7,9 +7,11 @@
 #                   http://<ha-ip>:1984/api/stream.mjpeg?src=doorbell_mjpeg
 #   Audio:          http://127.0.0.1:1984/api/stream.aac?src=doorbell, played by Home Assistant
 #                   on the display's media player. Requests from 127.0.0.1 need no password.
-#   Talk back (example/talkback.yaml): add ?backchannel=1 to the doorbell stream, so Home
-#                   Assistant's go2rtc also passes the doorbell's two-way audio channel:
-#                   doorbell: rtsp://127.0.0.1:18554/<stream-name>?backchannel=1
+#   doorbell_talk:  only for talking back (example/talkback.yaml): straight to the doorbell, so
+#                   go2rtc opens the two-way audio channel only while you talk and closes it
+#                   after. Leave it out if you don't use talkback.yaml. Not ?backchannel=1 on the
+#                   doorbell stream: that one is always on (preload), and an open backchannel keeps
+#                   a Reolink in two-way mode (blue ring, no chime; go2rtc issue #1860).
 #   preload:        keeps the MJPEG conversion running, so the first frame is on the display in
 #                   about 0.1 s instead of about 8 s (ffmpeg start + waiting for a key frame).
 #                   Cost about 0.5 % CPU on the tested Home Assistant host (add-on statistics). Leave it out
@@ -30,6 +32,7 @@ exec:
 streams:
   doorbell: rtsp://127.0.0.1:18554/<stream-name>
   doorbell_mjpeg: ffmpeg:doorbell#video=mjpeg
+  doorbell_talk: rtsp://<camera-user>:<camera-password>@<doorbell-ip>:554/h264Preview_01_sub
 
 preload:
   doorbell_mjpeg: video

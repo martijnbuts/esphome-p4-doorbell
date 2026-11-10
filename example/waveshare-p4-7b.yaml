@@ -114,6 +114,7 @@ packages:
           go2rtc_user: p4display
           go2rtc_password: !secret go2rtc_password
           go2rtc_audio: doorbell
+          go2rtc_talk: doorbell_talk
           talk_port: "8555"
           talk_max: 120s
           media_player_id: display_media_player
