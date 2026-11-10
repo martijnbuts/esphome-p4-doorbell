@@ -10,7 +10,7 @@ When someone rings the doorbell, an ESP32-P4 display opens a page with the live 
 
 The display opens one MJPEG connection to go2rtc; Home Assistant sends the ring and plays the audio.
 
-Written for: a Reolink D340P (any Reolink with an RTSP sub-stream in Home Assistant works), a Waveshare display with an ESP32-P4 and PSRAM (1024×600, LVGL), Home Assistant OS 2026.10.1 with the go2rtc add-on 1.9.14, ESPHome 2026.11.0-dev (checked again on 19 October 2026) and a MikroTik router as the firewall example. All code is in the repository [martijnbuts/esphome-p4-doorbell](https://github.com/martijnbuts/esphome-p4-doorbell).
+Written for: a Reolink D340P (any Reolink with an RTSP sub-stream in Home Assistant works), a Waveshare display with an ESP32-P4 and PSRAM (1024×600, LVGL), Home Assistant OS 2026.10.1 with the go2rtc add-on 1.9.14 (now running on 2026.11.1 and 1.9.15), ESPHome 2026.11.0-dev (versions checked again on 10 November 2026) and a MikroTik router as the firewall example. All code is in the repository [martijnbuts/esphome-p4-doorbell](https://github.com/martijnbuts/esphome-p4-doorbell).
 
 ## What you need
 
@@ -19,10 +19,10 @@ You need a Reolink camera in Home Assistant, the go2rtc add-on and an ESP32-P4 d
 | Part | Requirement | Why |
 | --- | --- | --- |
 | Reolink doorbell or camera | Added with the Reolink integration; a sub-stream of 640×480 | Home Assistant's built-in go2rtc serves its RTSP stream on 127.0.0.1:18554 |
-| Home Assistant | HA OS or Supervised (add-ons); tested on 2026.10.1 | Runs the go2rtc add-on and converts the audio for the display |
-| go2rtc add-on | From the AlexxIT add-on repository; tested on 1.9.14 | Turns the RTSP stream into MJPEG and AAC, behind a password |
+| Home Assistant | HA OS or Supervised (add-ons); tested on 2026.10.1, runs on 2026.11.1 | Runs the go2rtc add-on and converts the audio for the display |
+| go2rtc add-on | From the AlexxIT add-on repository; tested on 1.9.14, runs on 1.9.15 | Turns the RTSP stream into MJPEG and AAC, behind a password |
 | ESP32-P4 board with display | PSRAM (the frame buffers take about 1.5 MB), Wi-Fi, LVGL; the board in ESPHome must match the chip revision (below v3.0: esp32-p4-evboard, v3.0 and newer: esp32-p4\_r3-evboard) | The P4 has a hardware JPEG decoder: 5–10 ms per frame |
-| ESPHome | 2026.11.0-dev with ESP-IDF 5.5, 6.0 or 6.1 (all three tested) | The component uses the LVGL 9 canvas and the ESP-IDF JPEG driver |
+| ESPHome | 2026.11.0 or newer (now beta 2026.11.0b3 or dev) with ESP-IDF 5.5, 6.0 or 6.1 (all three tested) | The components use the LVGL 9 canvas and the ESP-IDF JPEG driver; LVGL only draws with the PPA from ESP-IDF 6.0 |
 | Media player on the display | An ESPHome `speaker` media player with an announcement pipeline | The doorbell audio plays as an announcement and pauses music |
 | Router | Firewall rules between VLANs (the example is MikroTik RouterOS 7) | The display sits in an IoT VLAN and may only reach go2rtc |
 
@@ -139,7 +139,7 @@ Actions: `jpeg_stream.start` (with an optional `url`), `jpeg_stream.stop` and `j
 
 This step adds the page that opens on a ring, as a package from the repository. It brings the page, the scripts, the fallback to Home Assistant snapshots and a button *Open doorbell camera* in Home Assistant.
 
-Do you have the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B? Then start from the complete example `example/waveshare-p4-7b.yaml` in the repository. It has the display, touch, Wi-Fi, the speaker and a home page with a video button. It compiles with ESPHome 2026.11.0-dev; its doorbell part is an English copy of the configuration that runs on the tested display. Otherwise add the package to your own configuration:
+Do you have the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B? Then start from the complete example `example/waveshare-p4-7b.yaml` in the repository. It has the display, touch, Wi-Fi, the speaker and a home page with a video button. It compiles with ESPHome 2026.11.0-dev and validates with 2026.11.0b3 and 2026.12.0-dev (10 November 2026); its doorbell part is an English copy of the configuration that runs on the tested display. Otherwise add the package to your own configuration:
 
 1. Put the go2rtc password in `secrets.yaml` of ESPHome:
 
@@ -339,5 +339,6 @@ These problems came up while building this.
 | The first frame takes several seconds | ffmpeg waits for a key frame of the camera | Keep `timeout: 10s`; add preload: doorbell\_mjpeg: video to go2rtc.yaml (Step 1) for a first frame in about 0.1 s |
 | `OTA with 32MB flash requires 'enable_idf_experimental_features'` | ESPHome rule for boards with 32 MB flash | Add `enable_idf_experimental_features: true` under `esp32: framework: advanced:` |
 | go2rtc web page asks for a login | The API password also protects the web page | Log in with the user name and password from `go2rtc.yaml` |
+| `'active_high' is a required option for [esp32_hosted]` | ESPHome 2026.10 still needs it; 2026.11 and newer ignore it and warn that it is deprecated | On ESPHome 2026.10 add `active_high: true` under `esp32_hosted:`; on 2026.11 and newer leave it out |
 
 Don't need audio or more than 4 fps? Then the snapshot mode alone (`jpeg_stream` with the camera proxy URL of Home Assistant) works without go2rtc and without a firewall change.
