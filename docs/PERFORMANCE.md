@@ -89,7 +89,8 @@ Same display, no rotation, camera at 10 fps, two 30-second windows each:
 
 Fills on the PPA change nothing for this page; drawing the picture with the PPA saves about 8 ms
 per frame. Receive (1.7 ms) and decode (3.5 ms) did not change. The rest of the page and the home
-page looked right in screenshots. In the windows with IDF 6.0 the longest gap between two frames
+page looked right in screenshots (made on the display with
+[`lvgl_screenshot`](../components/lvgl_screenshot), see the manual). In the windows with IDF 6.0 the longest gap between two frames
 was 230–275 ms (150–165 ms before); with 0 skipped frames this is probably the camera or Wi-Fi, but
 it has not been looked into yet.
 
@@ -308,6 +309,12 @@ draws the canvas with the PPA in the main loop. Two ways to keep them apart, nei
    A decode (3.5–8 ms) then never overlaps an LVGL refresh that may use the PPA.
 
 If a display hangs without a log while the stream runs, this is the first suspect.
+
+`lvgl_screenshot` adds a third DMA2D user: its hardware JPEG encoder shares the JPEG engine with
+the decoder (it waits up to 500 ms when the decoder is busy) and moves its data with DMA2D too.
+It runs only when Home Assistant asks for a picture, in the main loop, so it never overlaps an
+LVGL refresh, but it can overlap a decode in the stream task. Don't leave the screenshot camera
+open in Home Assistant while you test the stream for stability.
 
 ## How to measure
 

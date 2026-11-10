@@ -69,7 +69,13 @@ time:
 # The jpeg_stream component from this repository
 external_components:
   - source: github://martijnbuts/esphome-p4-doorbell@main
-    components: [jpeg_stream]
+    components: [jpeg_stream, lvgl_screenshot]
+
+# Optional: the display as a camera in Home Assistant (see the manual). Remove this block and
+# lvgl_screenshot above if you don't need it.
+lvgl_screenshot:
+  name: "Screen"
+  jpeg_quality: 85
 
 packages:
   doorbell:

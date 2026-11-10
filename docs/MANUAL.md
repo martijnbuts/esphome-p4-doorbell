@@ -1,6 +1,6 @@
 # Live Reolink doorbell video and audio on an ESP32-P4 display
 
-11 October 2026, updated 19 October 2026 · Martijn Buts
+11 October 2026, updated 10 November 2026 · Martijn Buts
 
 ## What you build
 
@@ -215,6 +215,43 @@ The audio is 1–2 s behind the picture, because ffmpeg and the media player buf
 
 Control: open the page and look at the media player in Home Assistant. It should say *Playing* within a second, and you hear the street. After **Back** it goes to *Idle*.
 
+## Optional: screenshot of the display
+
+This step adds a camera entity to Home Assistant that shows what the display shows. It is handy to check the doorbell page or a dashboard from a distance, and for documentation. The `lvgl_screenshot` component has nothing to do with the camera snapshots of the fallback: those come *from* Home Assistant, this picture goes *to* Home Assistant.
+
+1. Add the component next to `jpeg_stream`:
+
+   ```yaml
+   external_components:
+     - source: github://martijnbuts/esphome-p4-doorbell@main
+       components: [jpeg_stream, lvgl_screenshot]
+
+   lvgl_screenshot:
+     name: "Screen"
+     jpeg_quality: 85
+   ```
+2. Install the firmware. Home Assistant adds `camera.<device>_screen` to the device by itself.
+
+How it works: when Home Assistant asks for a picture, the component renders the active LVGL screen once more with `lv_snapshot` (RGB565) and encodes it with the hardware JPEG encoder of the ESP32-P4. The picture goes over the encrypted ESPHome API like that of any ESPHome camera. When nobody asks, nothing happens and no memory is used.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `name`, `id`, `icon`, `internal`, … | | The usual entity options |
+| `jpeg_quality` | `85` | JPEG quality, 10–100. The encoder uses 4:4:4, so small coloured text stays sharp |
+| `stream_interval` | `1s` | Time between pictures while the live view of the camera is open in Home Assistant |
+
+Points to know:
+
+- **ESP32-P4 only**, with PSRAM and LVGL: the hardware JPEG encoder only exists on the P4. The component turns on `LV_USE_SNAPSHOT` (off in the `lv_conf.h` ESPHome generates) and the ESP-IDF `esp_driver_jpeg` component.
+- **Memory**: the first picture allocates two buffers in PSRAM that stay: the raw screen (width × height × 2, 1.2 MB at 1024×600) and the JPEG output (half of that, 0.6 MB). Every picture gets its own copy of the exact JPEG size while it is sent. A 1024×600 dashboard at quality 85 was 111 KB (measured 10 November 2026).
+- **Only the active screen**: widgets on LVGL's top or system layer (for example a message box shown on `lv_layer_top`) are not in the picture. The picture is the LVGL screen itself, not a read-back of the panel.
+- **The screen size must be a multiple of 8** in both directions (1024×600 is). Otherwise the log says `Screen size ... is not a multiple of 8` and no picture is made.
+- **Runs in the main loop**: rendering and encoding happen in `loop()`, so a picture briefly holds up the main loop. The log shows the time for both (`Screenshot 1024x600, ... bytes (render ... ms, jpeg ... ms)`; the first after boot at INFO, the rest at DEBUG). Keep `stream_interval` at 1 s or more.
+- **Shares the JPEG engine with `jpeg_stream`**: the encoder waits up to 500 ms when the decoder is busy with a doorbell frame. Both use DMA2D; see *DMA2D: JPEG decoder and PPA* in [PERFORMANCE.md](PERFORMANCE.md#dma2d-jpeg-decoder-and-ppa).
+- **Privacy**: everyone who can see the camera entity in Home Assistant sees the screen, including the doorbell picture while the page is open.
+
+Control: open the camera entity in Home Assistant. You see the current screen, and the log of the display shows `First screenshot 1024x600, ... bytes`.
+
 ## Performance
 
 On the tested display a frame takes about 2–3.5 ms to receive and 3.5 ms to decode. The limit is the LVGL refresh of the 640×480 picture on the main loop. The camera delivers 10 fps, so every camera frame is shown in all set-ups below. With the synthetic source the display now shows up to 39 fps, against 21.5 fps before.
@@ -282,6 +319,7 @@ Test each part on its own, from the network the display is in, before you rely o
 | Audio stops | Press **Back** | Media player *Idle*; no consumers left in go2rtc (`/api/streams`) |
 | Fallback | Stop the go2rtc add-on and open the page | After about 2 s the status says `(via HA)` at 3–4 fps |
 | Real ring | Ring the doorbell | The page opens by itself and closes after 90 s |
+| Screenshot (optional) | Open `camera.<device>_screen` in Home Assistant | The picture matches the display; the log shows `First screenshot ...` |
 
 Start the go2rtc add-on again after the fallback test.
 

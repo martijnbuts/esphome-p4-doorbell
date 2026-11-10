@@ -15,6 +15,7 @@ A video button shows the picture without a ring.
 | Path | What it is |
 | --- | --- |
 | [`components/jpeg_stream`](components/jpeg_stream) | ESPHome external component: receives an MJPEG stream (or repeated JPEG snapshots) in a background task and decodes every frame with the ESP32-P4 hardware JPEG decoder onto an LVGL canvas |
+| [`components/lvgl_screenshot`](components/lvgl_screenshot) | ESPHome external component: shows the LVGL screen as a camera in Home Assistant, encoded with the ESP32-P4 hardware JPEG encoder, only when Home Assistant asks for a picture |
 | [`example/doorbell.yaml`](example/doorbell.yaml) | Package with the doorbell page, the scripts, the audio and the fallback to Home Assistant snapshots |
 | [`example/waveshare-p4-7b.yaml`](example/waveshare-p4-7b.yaml) | Complete device configuration for the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B |
 | [`example/go2rtc.yaml`](example/go2rtc.yaml) | Configuration for the go2rtc add-on (MJPEG + AAC from the camera's RTSP stream) |
@@ -44,6 +45,21 @@ jpeg_stream:
 Add `stats_interval: 10s` to log receive, decode, hand-off and LVGL refresh times while the stream runs.
 
 The manual explains the whole setup: go2rtc, the firewall rule, the doorbell page and the audio.
+
+### Screenshot of the display (optional)
+
+```yaml
+external_components:
+  - source: github://martijnbuts/esphome-p4-doorbell@main
+    components: [jpeg_stream, lvgl_screenshot]
+
+lvgl_screenshot:
+  name: "Screen"          # becomes camera.<device>_screen in Home Assistant
+  jpeg_quality: 85        # 10–100
+```
+
+Home Assistant then shows the display as a camera. A picture is only made when Home Assistant asks
+for one. See [Screenshot of the display](docs/MANUAL.md#optional-screenshot-of-the-display) in the manual.
 
 ## Measured
 
