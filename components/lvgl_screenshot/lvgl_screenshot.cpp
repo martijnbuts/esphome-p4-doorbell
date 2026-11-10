@@ -13,8 +13,9 @@ namespace esphome::lvgl_screenshot {
 
 static const char *const TAG = "lvgl_screenshot";
 static constexpr uint32_t PSRAM_CAPS = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-// Far longer than the hardware needs for 1024x600 (a few ms); the codec may first be busy
-// with a doorbell frame (jpeg_stream shares the same JPEG engine).
+// Far longer than the hardware needs for 1024x600 (a few ms). This only bounds the encode itself:
+// the driver first takes the codec mutex without a time limit, so when jpeg_stream is decoding a
+// doorbell frame (same JPEG engine) the encoder waits for that decode (a few ms) to finish.
 static constexpr int ENCODER_TIMEOUT_MS = 500;
 
 ScreenshotImage::~ScreenshotImage() { heap_caps_free(this->data_); }

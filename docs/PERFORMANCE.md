@@ -13,6 +13,34 @@ because go2rtc started ffmpeg only then. With a go2rtc `preload` it is 0.13 s
 
 This page lists what was measured, how, and where the time could still be won.
 
+## Hardware acceleration at a glance
+
+The ESP32-P4 has three blocks that do the heavy work here: the JPEG codec, the PPA (pixel
+processing accelerator) and the 2D-DMA controller (DMA2D) that moves the data for both. Which one
+does what, and when it is on (checked against ESPHome dev, LVGL 9.6.0 and ESP-IDF 6.1 on
+10 November 2026):
+
+| Work | Hardware | When it is on | Who turns it on |
+| --- | --- | --- | --- |
+| Decoding the doorbell JPEG into the canvas buffer (RGB565) | JPEG codec, decoder | Always, every frame, in the `jpeg_stream` background task | `jpeg_stream` |
+| Encoding a screenshot (RGB565 → JPEG, 4:4:4) | JPEG codec, encoder | Only when Home Assistant asks for a picture, in the main loop | `lvgl_screenshot` (optional) |
+| Turning every LVGL refresh by 90/180/270° | PPA, scale-rotate-mirror | Only with an LVGL `rotation`; any ESP-IDF version | ESPHome (its own flush code) |
+| LVGL fills (backgrounds, rectangles) | PPA, fill | ESP-IDF 6.0 or newer | ESPHome sets `LV_USE_PPA` (since LVGL 9.6) |
+| LVGL drawing images, such as the doorbell canvas | PPA, blend | ESP-IDF 6.0 or newer **and** the build flag `-DLV_USE_PPA_IMG=1`; only unscaled, unrotated, fully opaque images without masks | You (off by default in LVGL) |
+| Moving the data for all of the above | DMA2D | Whenever one of the above runs | The ESP-IDF drivers |
+
+What this means in practice:
+
+- **With ESPHome's default ESP-IDF (5.5.6)** only the JPEG codec and, with a rotation, the PPA
+  rotation are used; LVGL draws everything else in software. That is enough for the 10 fps of the
+  camera.
+- **The biggest gain is not hardware but leaving work out**: no `rotation` (13 ms per frame) and
+  no `clip_corner` on the card around the picture (10 ms). `LV_USE_PPA_IMG` then saves another 8 ms.
+- **The JPEG codec is one engine.** The ESP-IDF driver takes a lock for each decode or encode, so
+  a screenshot and a doorbell frame never run at the same time; one waits a few ms for the other.
+- **DMA2D is shared without such a lock** between the JPEG codec and the PPA. That is a known risk
+  on the ESP32-P4; see [DMA2D: JPEG decoder and PPA](#dma2d-jpeg-decoder-and-ppa).
+
 ## Test setup
 
 | Part | Value |
@@ -294,10 +322,10 @@ is measured under 1 s. Measuring both on the same board, with the method below, 
 On the ESP32-P4 the hardware JPEG decoder and the PPA both move their data with the 2D-DMA
 controller (DMA2D). Two reports describe DMA2D getting stuck under load:
 
-| Report | What | Status on 19 October 2026 |
+| Report | What | Status on 10 November 2026 |
 | --- | --- | --- |
-| [esp-idf#18999](https://github.com/espressif/esp-idf/issues/18999) | Interrupt watchdog: `dma2d_connect()` waits forever for a channel reset, under continuous PPA load (ESP32-P4 rev 1.3; IDF 6.0, 6.1-rc1, master) | Closed by the reporter without a confirmed fix; followed up in #19108 |
-| [esp-idf#19108](https://github.com/espressif/esp-idf/issues/19108) | Channel reset never completes; from then on every DMA2D transfer hangs, without a crash or log. The reporter's pipeline runs `jpeg_decoder_process()` and the PPA in separate tasks | Open; Espressif cannot reproduce it yet. The reporter's workaround: one mutex around both calls |
+| [esp-idf#18999](https://github.com/espressif/esp-idf/issues/18999) | Interrupt watchdog: `dma2d_connect()` waits forever for a channel reset, under continuous PPA load (ESP32-P4 rev 1.3; IDF 6.0, 6.1-rc1, master) | Closed as a duplicate of #19108, without a fix |
+| [esp-idf#19108](https://github.com/espressif/esp-idf/issues/19108) | Channel reset never completes; from then on every DMA2D transfer hangs, without a crash or log. The reporter's pipeline runs `jpeg_decoder_process()` and the PPA in separate tasks | Open, no fix linked; Espressif could not reproduce it yet (last activity 8 October 2026). The reporter's workaround: one mutex around both calls |
 
 That is the situation of this component with `LV_USE_PPA_IMG`: the stream task decodes while LVGL
 draws the canvas with the PPA in the main loop. Two ways to keep them apart, neither built yet:
@@ -311,7 +339,7 @@ draws the canvas with the PPA in the main loop. Two ways to keep them apart, nei
 If a display hangs without a log while the stream runs, this is the first suspect.
 
 `lvgl_screenshot` adds a third DMA2D user: its hardware JPEG encoder shares the JPEG engine with
-the decoder (it waits up to 500 ms when the decoder is busy) and moves its data with DMA2D too.
+the decoder (the ESP-IDF driver lets one wait for the other) and moves its data with DMA2D too.
 It runs only when Home Assistant asks for a picture, in the main loop, so it never overlaps an
 LVGL refresh, but it can overlap a decode in the stream task. Don't leave the screenshot camera
 open in Home Assistant while you test the stream for stability.

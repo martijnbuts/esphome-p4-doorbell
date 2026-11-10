@@ -133,7 +133,7 @@ A user name and password in the URL are sent as HTTP Basic authentication. A fra
 | `min_interval` | 0ms | Minimum time between two frames |
 | `on_frame`, `on_error` | none | Automations after each frame and after each error |
 
-Actions: `jpeg_stream.start` (with an optional `url`), `jpeg_stream.stop` and `jpeg_stream.set_url`. Condition: `jpeg_stream.is_running`. In a lambda, `get_last_frame_time()` gives the decode time of the last frame and `get_dropped_count()` the skipped frames, and get\_last\_shown() the millis() of the last frame on the canvas. When a stream starts, the log shows First frame ... ms after start. The option stats\_interval (default 0s, off) logs where the time goes; see Performance.
+Actions: `jpeg_stream.start` (with an optional `url`), `jpeg_stream.stop` and `jpeg_stream.set_url`. Condition: `jpeg_stream.is_running`. In a lambda, `get_last_frame_time()` gives the decode time of the last frame, `get_dropped_count()` the skipped frames and `get_last_shown()` the `millis()` of the last frame on the canvas. When a stream starts, the log shows `First frame ... ms after start`. The option `stats_interval` (default `0s`, off) logs where the time goes; see *Performance*.
 
 ## Step 4: Add the doorbell page
 
@@ -247,7 +247,7 @@ Points to know:
 - **Only the active screen**: widgets on LVGL's top or system layer (for example a message box shown on `lv_layer_top`) are not in the picture. The picture is the LVGL screen itself, not a read-back of the panel.
 - **The screen size must be a multiple of 8** in both directions (1024×600 is). Otherwise the log says `Screen size ... is not a multiple of 8` and no picture is made.
 - **Runs in the main loop**: rendering and encoding happen in `loop()`, so a picture briefly holds up the main loop. The log shows the time for both (`Screenshot 1024x600, ... bytes (render ... ms, jpeg ... ms)`; the first after boot at INFO, the rest at DEBUG). Keep `stream_interval` at 1 s or more.
-- **Shares the JPEG engine with `jpeg_stream`**: the encoder waits up to 500 ms when the decoder is busy with a doorbell frame. Both use DMA2D; see *DMA2D: JPEG decoder and PPA* in [PERFORMANCE.md](PERFORMANCE.md#dma2d-jpeg-decoder-and-ppa).
+- **Shares the JPEG engine with `jpeg_stream`**: the ESP-IDF driver lets only one of them use the engine at a time, so a screenshot waits until a doorbell frame is decoded (a few ms). Both use DMA2D; see *DMA2D: JPEG decoder and PPA* in [PERFORMANCE.md](PERFORMANCE.md#dma2d-jpeg-decoder-and-ppa).
 - **Privacy**: everyone who can see the camera entity in Home Assistant sees the screen, including the doorbell picture while the page is open.
 
 Control: open the camera entity in Home Assistant. You see the current screen, and the log of the display shows `First screenshot 1024x600, ... bytes`.
@@ -274,7 +274,7 @@ What made the difference:
 - **No LVGL rotation**: `rotation: 180` turned every refresh with the PPA into an extra 1.2 MB buffer: 13 ms per frame. If your display hangs upside down, turn the display around instead and remove the rotation; touch follows by itself.
 - **ESP-IDF 6.x and LVGL drawing the picture with the PPA**: 8 ms per frame. With ESP-IDF 6.0 or newer (`esp32: framework: version: 6.1.0`; measured with 6.0.1) ESPHome turns on the LVGL PPA draw unit for fills; drawing images with it is a separate LVGL option. Add it as a build flag: `esphome: build_flags: [-DLV_USE_PPA_IMG=1]`.
 
-One known risk on the ESP32-P4: the hardware JPEG decoder and the PPA share the 2D-DMA controller, which can hang under load ([esp-idf#19108](https://github.com/espressif/esp-idf/issues/19108), open on 19 October 2026). With `LV_USE_PPA_IMG` both run for every frame. PERFORMANCE.md describes it and two ways to keep them apart.
+One known risk on the ESP32-P4: the hardware JPEG decoder and the PPA share the 2D-DMA controller, which can hang under load ([esp-idf#19108](https://github.com/espressif/esp-idf/issues/19108), still open on 10 November 2026). With `LV_USE_PPA_IMG` both run for every frame. On ESPHome's default ESP-IDF 5.5 LVGL does not draw with the PPA at all, so the decoder only meets the PPA when LVGL has a `rotation`. PERFORMANCE.md describes it and two ways to keep them apart.
 
 The start-up is set by go2rtc, not by the display: 7.7 s from opening the page to the first frame without `preload`, 0.13 s with it.
 

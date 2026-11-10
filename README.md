@@ -79,7 +79,10 @@ The limit is the LVGL refresh of the 640×480 canvas, not the network or the dec
 
 With a go2rtc `preload` the first frame is on the screen 0.13 s after the page opens (7.7 s
 without). Details, how to measure and ideas to make it faster:
-**[docs/PERFORMANCE.md](docs/PERFORMANCE.md)**. It also covers a known ESP32-P4 risk: the hardware
+**[docs/PERFORMANCE.md](docs/PERFORMANCE.md)**, which starts with an overview of which hardware
+(JPEG codec, PPA, DMA2D) does what and when it is on
+([Hardware acceleration at a glance](docs/PERFORMANCE.md#hardware-acceleration-at-a-glance)).
+It also covers a known ESP32-P4 risk: the hardware
 JPEG decoder and the PPA share the DMA2D controller, which can hang under load
 ([DMA2D: JPEG decoder and PPA](docs/PERFORMANCE.md#dma2d-jpeg-decoder-and-ppa)).
 
