@@ -288,7 +288,9 @@ Actions `go2rtc_talkback.start` and `go2rtc_talkback.stop`; conditions `go2rtc_t
 
 Control: tap **Talk**. The button turns red and says *Stop talking* within about a second; the log shows `go2rtc is fetching the microphone (... ms after start)`. Speak and listen at the door. Tap again: the log shows `Stopped after ... ms: ... bytes sent`. Then ring the doorbell: the chime must sound and the ring light must not stay blue.
 
-Still open (10 November 2026): which codec the D340P picks (go2rtc chooses it with `#audio=auto`; other reports say PCMU on firmware v3.0.0.4662), the delay (others report 1–2 s with Reolink, also from the browser), and the volume (`mic_gain`, and *Speak volume* of the doorbell in the Reolink integration).
+The backchannel codec of the D340P (firmware v3.0.0.6460) is PCMU/8000; go2rtc picks it with `#audio=auto`. You can check yours without sound: `http://<ha-ip>:1984/api/streams?src=doorbell_talk&video=all&audio=all` (with the go2rtc login) lists it as `audio, sendonly, PCMU/8000`.
+
+Still open (10 November 2026): the delay (others report 1–2 s with Reolink, also from the browser), and the volume (`mic_gain`, and *Speak volume* of the doorbell in the Reolink integration).
 
 ## Optional: screenshot of the display
 
