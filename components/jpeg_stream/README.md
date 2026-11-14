@@ -65,7 +65,8 @@ Condition: `jpeg_stream.is_running`.
   RGB565 frame buffers in PSRAM. The main loop then points the canvas at that buffer
   (`lv_canvas_set_draw_buf`), so a frame is never copied after decoding.
 - **Lowest latency:** a frame that arrives while the previous one is not on the screen yet is
-  skipped rather than queued.
+  skipped rather than queued. The task waits on a semaphore that the main loop gives as soon as
+  the previous frame is on the canvas (and on `stop()` or a new URL), so there is no polling.
 - **Decoders:**
   - `hardware` (ESP32-P4): `esp_driver_jpeg`. After a failed decode the engine is recreated
     once (following the approach of the transcoder and picture_viewer components in
@@ -98,6 +99,13 @@ A smaller picture (for example go2rtc scaling to 480×360) or `min_interval` low
 The P4 numbers are from the more detailed measurements in [docs/PERFORMANCE.md](../../docs/PERFORMANCE.md)
 (12 October 2026; synthetic 30 and 60 fps sources, start-up time, CPU per task); the first-frame
 time was measured again on 14 November 2026 with this version.
+
+## Tests
+
+[`tests/components/jpeg_stream`](../../tests/components/jpeg_stream) has test configurations in
+the layout of ESPHome's own tests: ESP32-S3 (software), ESP32-P4 (hardware) and ESP32-P4 with
+`decoder: software`. They exercise every option, action and the condition; see
+[`tests/README.md`](../../tests/README.md).
 
 ## Tested on
 

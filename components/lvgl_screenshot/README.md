@@ -89,6 +89,13 @@ component per loop (on the S3 ESPHome logged `lvgl_screenshot took a long time f
 operation (125 ms), max is 50 ms`). Moving the encoder to a task fixed the much longer
 encode, but rendering still has to happen where LVGL runs. See the open questions below.
 
+## Tests
+
+[`tests/components/lvgl_screenshot`](../../tests/components/lvgl_screenshot) has test
+configurations in the layout of ESPHome's own tests: ESP32-S3 (software, with a `camera_encoder`
+block), ESP32-P4 (hardware) and ESP32-P4 with an explicit software `encoder`; see
+[`tests/README.md`](../../tests/README.md).
+
 ## Tested on
 
 - Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024×600, MIPI DSI), ESP-IDF 6.1, LVGL 9.6
