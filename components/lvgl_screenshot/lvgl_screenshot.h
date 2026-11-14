@@ -24,12 +24,12 @@
 
 namespace esphome::lvgl_screenshot {
 
-/// One JPEG screenshot, shared by all API connections until the last one is done with it.
+/// One JPEG screenshot. It points into the component's own output buffer (no copy): the next
+/// screenshot is only made once every API connection has released this one.
 class ScreenshotImage : public camera::CameraImage {
  public:
   ScreenshotImage(uint8_t *data, size_t length, uint8_t requesters)
       : data_(data), length_(length), requesters_(requesters) {}
-  ~ScreenshotImage() override;
   uint8_t *get_data_buffer() override { return this->data_; }
   size_t get_data_length() override { return this->length_; }
   bool was_requested_by(camera::CameraRequester requester) const override {
@@ -48,9 +48,7 @@ class ScreenshotImageReader : public camera::CameraImageReader {
     this->image_ = std::move(image);
     this->offset_ = 0;
   }
-  size_t available() const override {
-    return this->image_ ? this->image_->get_data_length() - this->offset_ : 0;
-  }
+  size_t available() const override { return this->image_ ? this->image_->get_data_length() - this->offset_ : 0; }
   uint8_t *peek_data_buffer() override { return this->image_->get_data_buffer() + this->offset_; }
   void consume_data(size_t consumed) override { this->offset_ += consumed; }
   void return_image() override { this->image_.reset(); }
@@ -99,7 +97,7 @@ class LvglScreenshot : public camera::Camera {
 
  protected:
   bool prepare_(uint32_t width, uint32_t height);
-  bool render_(uint32_t &width, uint32_t &height);
+  bool render_();
   bool capture_(uint8_t requesters);
   void publish_(uint8_t *jpeg, size_t jpeg_len, uint8_t requesters, uint32_t render_ms, uint32_t encode_ms);
 
@@ -117,8 +115,8 @@ class LvglScreenshot : public camera::Camera {
   bool first_done_{false};
 
 #ifdef USE_LVGL_SCREENSHOT_HW_JPEG
-  // Hardware JPEG encoder (shares the codec with jpeg_stream's decoder) and its DMA output
-  // buffer, created on the first screenshot and kept.
+  // Hardware JPEG encoder (shares the codec with a hardware JPEG decoder) and its DMA output
+  // buffer, created on the first screenshot and kept. The published image points into it.
   jpeg_encoder_handle_t hw_encoder_{nullptr};
   uint8_t *out_buf_{nullptr};
   size_t out_size_{0};
@@ -128,6 +126,7 @@ class LvglScreenshot : public camera::Camera {
 #ifdef USE_LVGL_SCREENSHOT_SW_JPEG
   enum SwState : uint8_t { SW_IDLE = 0, SW_BUSY, SW_DONE, SW_FAILED };
 
+  bool start_task_();
   static void encode_task_(void *arg);
   void encode_sw_();
 
@@ -140,8 +139,7 @@ class LvglScreenshot : public camera::Camera {
   uint8_t sw_requesters_{0};
   uint32_t sw_render_ms_{0};
   uint32_t sw_encode_ms_{0};
-  uint8_t *sw_jpeg_{nullptr};
-  size_t sw_jpeg_len_{0};
+  uint32_t sw_stack_free_{0};  // bytes of task stack never used (high-water mark)
   const char *sw_error_{nullptr};
 #endif
 };

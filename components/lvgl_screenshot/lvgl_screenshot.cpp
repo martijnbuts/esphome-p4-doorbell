@@ -2,8 +2,6 @@
 
 #ifdef USE_ESP32
 
-#include <cstring>
-
 #include <esp_heap_caps.h>
 
 #include "esphome/core/hal.h"
@@ -12,45 +10,27 @@
 namespace esphome::lvgl_screenshot {
 
 static const char *const TAG = "lvgl_screenshot";
-static constexpr uint32_t PSRAM_CAPS = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-static constexpr uint32_t INTERNAL_CAPS = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 
 #ifdef USE_LVGL_SCREENSHOT_HW_JPEG
 // Far longer than the hardware needs for 1024x600 (a few ms). This only bounds the encode itself:
-// the driver first takes the codec mutex without a time limit, so when jpeg_stream is decoding a
-// doorbell frame (same JPEG engine) the encoder waits for that decode (a few ms) to finish.
+// the driver first takes the codec mutex without a time limit, so when a hardware JPEG decode
+// (same engine) is running, the encoder waits for it to finish.
 static constexpr int ENCODER_TIMEOUT_MS = 500;
 #endif
 
 #ifdef USE_LVGL_SCREENSHOT_SW_JPEG
-static constexpr uint32_t TASK_STACK_SIZE = 8192;
+// The esp32-camera encoder keeps about 1.2 kB on the stack; the log reports what is left.
+static constexpr uint32_t TASK_STACK_SIZE = 6144;
 // Encoding attempts per screenshot; each failed one grows the encoder's output buffer by half.
 static constexpr int MAX_ENCODE_ATTEMPTS = 6;
 #endif
 
-/// PSRAM when there is any, internal RAM otherwise (small screens on chips without PSRAM).
-static uint8_t *alloc_large(size_t size) {
-  auto *p = static_cast<uint8_t *>(heap_caps_malloc(size, PSRAM_CAPS));
-  if (p == nullptr)
-    p = static_cast<uint8_t *>(heap_caps_malloc(size, INTERNAL_CAPS));
-  return p;
-}
-
-ScreenshotImage::~ScreenshotImage() { heap_caps_free(this->data_); }
-
 void LvglScreenshot::setup() {
-  // The encoder and the picture buffers are created on the first request, so a display
-  // nobody looks at costs no memory. Only the (small) software encoding task starts here.
+  // Buffers, the hardware encoder and the software encoding task are all created on the first
+  // request, so a display nobody looks at costs no memory.
 #ifdef USE_LVGL_SCREENSHOT_SW_JPEG
   if (this->encoder_ == nullptr) {
     ESP_LOGE(TAG, "No JPEG encoder");
-    this->mark_failed();
-    return;
-  }
-  if (xTaskCreate(encode_task_, "screenshot_jpg", TASK_STACK_SIZE, this, this->task_priority_, &this->task_) !=
-      pdPASS) {
-    ESP_LOGE(TAG, "Could not start the encoding task");
-    this->task_ = nullptr;
     this->mark_failed();
   }
 #endif
@@ -69,7 +49,7 @@ void LvglScreenshot::dump_config() {
 #endif
 #ifdef USE_LVGL_SCREENSHOT_SW_JPEG
   ESP_LOGCONFIG(TAG,
-                "  Encoder: software (camera_encoder) in its own task\n"
+                "  Encoder: camera_encoder, in its own task\n"
                 "  Task priority: %u",
                 this->task_priority_);
   // camera_encoder is not a Component, so nobody else logs its settings
@@ -78,9 +58,7 @@ void LvglScreenshot::dump_config() {
 #endif
 }
 
-void LvglScreenshot::request_image(camera::CameraRequester requester) {
-  this->single_requesters_ |= (1U << requester);
-}
+void LvglScreenshot::request_image(camera::CameraRequester requester) { this->single_requesters_ |= (1U << requester); }
 
 void LvglScreenshot::start_stream(camera::CameraRequester requester) {
   this->stream_requesters_ |= (1U << requester);
@@ -101,9 +79,8 @@ void LvglScreenshot::loop() {
   if (state == SW_BUSY)
     return;
   if (state == SW_DONE) {
-    this->publish_(this->sw_jpeg_, this->sw_jpeg_len_, this->sw_requesters_, this->sw_render_ms_,
-                   this->sw_encode_ms_);
-    this->sw_jpeg_ = nullptr;
+    camera::EncoderBuffer *out = this->encoder_->get_output_buffer();
+    this->publish_(out->get_data(), out->get_size(), this->sw_requesters_, this->sw_render_ms_, this->sw_encode_ms_);
     this->sw_state_.store(SW_IDLE, std::memory_order_release);
   } else if (state == SW_FAILED) {
     ESP_LOGE(TAG, "JPEG encoding failed: %s", this->sw_error_ != nullptr ? this->sw_error_ : "unknown");
@@ -118,7 +95,8 @@ void LvglScreenshot::loop() {
     requesters |= this->stream_requesters_;
   if (requesters == 0)
     return;
-  // Wait until every client has finished sending the previous screenshot.
+  // Wait until every client has released the previous screenshot: it points into the output
+  // buffer that the next one is written to.
   if (this->current_image_ && this->current_image_.use_count() > 1)
     return;
   this->current_image_.reset();
@@ -141,6 +119,10 @@ bool LvglScreenshot::prepare_(uint32_t width, uint32_t height) {
     }
   }
 #endif
+#ifdef USE_LVGL_SCREENSHOT_SW_JPEG
+  if (!this->start_task_())
+    return false;
+#endif
   if (this->raw_buf_ != nullptr && width == this->width_ && height == this->height_)
     return true;
 
@@ -157,7 +139,7 @@ bool LvglScreenshot::prepare_(uint32_t width, uint32_t height) {
   jpeg_encode_memory_alloc_cfg_t in_cfg = {.buffer_direction = JPEG_ENC_ALLOC_INPUT_BUFFER};
   jpeg_encode_memory_alloc_cfg_t out_cfg = {.buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER};
   // A JPEG of a dashboard is a fraction of the raw size; half of it leaves ample room even for
-  // a doorbell photo, and the encoder reports an error rather than overflowing.
+  // a photo, and the encoder reports an error rather than overflowing.
   this->raw_buf_ = static_cast<uint8_t *>(jpeg_alloc_encoder_mem(stride * height, &in_cfg, &this->raw_size_));
   this->out_buf_ = static_cast<uint8_t *>(jpeg_alloc_encoder_mem(stride * height / 2, &out_cfg, &this->out_size_));
   if (this->raw_buf_ == nullptr || this->out_buf_ == nullptr) {
@@ -167,7 +149,10 @@ bool LvglScreenshot::prepare_(uint32_t width, uint32_t height) {
     this->raw_buf_ = nullptr;
   }
 #else
-  this->raw_buf_ = alloc_large(stride * height);
+  // PSRAM when there is any, internal RAM otherwise (small screens on chips without PSRAM)
+  this->raw_buf_ = static_cast<uint8_t *>(heap_caps_malloc(stride * height, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (this->raw_buf_ == nullptr)
+    this->raw_buf_ = static_cast<uint8_t *>(heap_caps_malloc(stride * height, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   if (this->raw_buf_ != nullptr)
     this->raw_size_ = stride * height;
 #endif
@@ -182,8 +167,9 @@ bool LvglScreenshot::prepare_(uint32_t width, uint32_t height) {
   return true;
 }
 
-/// Render the active LVGL screen into raw_buf_ (RGB565, little endian). Main loop only.
-bool LvglScreenshot::render_(uint32_t &width, uint32_t &height) {
+/// Render the active LVGL screen into raw_buf_ (RGB565, little endian). Main loop only:
+/// LVGL is not thread-safe.
+bool LvglScreenshot::render_() {
   lv_obj_t *screen = lv_screen_active();
   if (screen == nullptr) {
     ESP_LOGW(TAG, "No active LVGL screen");
@@ -216,15 +202,12 @@ bool LvglScreenshot::render_(uint32_t &width, uint32_t &height) {
              this->width_);
     return false;
   }
-  width = this->width_;
-  height = this->height_;
   return true;
 }
 
 bool LvglScreenshot::capture_(uint8_t requesters) {
   const uint32_t start = millis();
-  uint32_t width, height;
-  if (!this->render_(width, height))
+  if (!this->render_())
     return false;
   const uint32_t rendered = millis();
 
@@ -232,36 +215,24 @@ bool LvglScreenshot::capture_(uint8_t requesters) {
   // Encode in hardware. 4:4:4 keeps small coloured text sharp. The driver writes the cache
   // back to PSRAM before the DMA reads the picture.
   jpeg_encode_cfg_t cfg = {};
-  cfg.width = width;
-  cfg.height = height;
+  cfg.width = this->width_;
+  cfg.height = this->height_;
   cfg.src_type = JPEG_ENCODE_IN_FORMAT_RGB565;
   cfg.sub_sample = JPEG_DOWN_SAMPLING_YUV444;
   cfg.image_quality = this->quality_;
   uint32_t jpeg_len = 0;
-  const esp_err_t err = jpeg_encoder_process(this->hw_encoder_, &cfg, this->raw_buf_, width * height * 2,
+  const esp_err_t err = jpeg_encoder_process(this->hw_encoder_, &cfg, this->raw_buf_, this->width_ * this->height_ * 2,
                                              this->out_buf_, this->out_size_, &jpeg_len);
   if (err != ESP_OK || jpeg_len == 0) {
     ESP_LOGE(TAG, "JPEG encoding failed: %s", esp_err_to_name(err));
     return false;
   }
-  const uint32_t encoded = millis();
-
-  // Copy the JPEG into an exact-size buffer, so the output buffer is free for the next
-  // screenshot while the API connections are still sending this one.
-  auto *jpeg = alloc_large(jpeg_len);
-  if (jpeg == nullptr) {
-    ESP_LOGE(TAG, "Could not allocate %" PRIu32 " bytes for the JPEG", jpeg_len);
-    return false;
-  }
-  std::memcpy(jpeg, this->out_buf_, jpeg_len);
-  this->publish_(jpeg, jpeg_len, requesters, rendered - start, encoded - rendered);
+  this->publish_(this->out_buf_, jpeg_len, requesters, rendered - start, millis() - rendered);
   return true;
 #endif
 
 #ifdef USE_LVGL_SCREENSHOT_SW_JPEG
   // Hand the picture to the encoding task; loop() publishes the result.
-  if (this->task_ == nullptr)
-    return false;
   this->sw_requesters_ = requesters;
   this->sw_render_ms_ = rendered - start;
   this->sw_error_ = nullptr;
@@ -274,13 +245,17 @@ bool LvglScreenshot::capture_(uint8_t requesters) {
 void LvglScreenshot::publish_(uint8_t *jpeg, size_t jpeg_len, uint8_t requesters, uint32_t render_ms,
                               uint32_t encode_ms) {
   this->current_image_ = std::make_shared<ScreenshotImage>(jpeg, jpeg_len, requesters);
-  // The first screenshot after boot at INFO (the screens log at INFO), the rest at DEBUG
+  // The first screenshot after boot at INFO, the rest at DEBUG
   if (this->first_done_) {
     ESP_LOGD(TAG, "Screenshot %" PRIu32 "x%" PRIu32 ", %zu bytes (render %" PRIu32 " ms, jpeg %" PRIu32 " ms)",
              this->width_, this->height_, jpeg_len, render_ms, encode_ms);
   } else {
     ESP_LOGI(TAG, "First screenshot %" PRIu32 "x%" PRIu32 ", %zu bytes (render %" PRIu32 " ms, jpeg %" PRIu32 " ms)",
              this->width_, this->height_, jpeg_len, render_ms, encode_ms);
+#ifdef USE_LVGL_SCREENSHOT_SW_JPEG
+    ESP_LOGI(TAG, "Encoding task: %" PRIu32 " of %" PRIu32 " stack bytes never used", this->sw_stack_free_,
+             TASK_STACK_SIZE);
+#endif
     this->first_done_ = true;
   }
   for (auto *listener : this->listeners_)
@@ -288,6 +263,18 @@ void LvglScreenshot::publish_(uint8_t *jpeg, size_t jpeg_len, uint8_t requesters
 }
 
 #ifdef USE_LVGL_SCREENSHOT_SW_JPEG
+bool LvglScreenshot::start_task_() {
+  if (this->task_ != nullptr)
+    return true;
+  if (xTaskCreate(encode_task_, "screenshot_jpg", TASK_STACK_SIZE, this, this->task_priority_, &this->task_) !=
+      pdPASS) {
+    this->task_ = nullptr;
+    ESP_LOGE(TAG, "Could not start the encoding task");
+    return false;
+  }
+  return true;
+}
+
 void LvglScreenshot::encode_task_(void *arg) {
   auto *self = static_cast<LvglScreenshot *>(arg);
   while (true) {
@@ -336,20 +323,10 @@ void LvglScreenshot::encode_sw_() {
     this->sw_state_.store(SW_FAILED, std::memory_order_release);
     return;
   }
-
-  // Copy into an exact-size buffer, so the encoder can make the next screenshot while the
-  // API connections are still sending this one.
-  const size_t len = out->get_size();
-  uint8_t *jpeg = alloc_large(len);
-  if (jpeg == nullptr) {
-    this->sw_error_ = "out of memory for the JPEG copy";
-    this->sw_state_.store(SW_FAILED, std::memory_order_release);
-    return;
-  }
-  std::memcpy(jpeg, out->get_data(), len);
-  this->sw_jpeg_ = jpeg;
-  this->sw_jpeg_len_ = len;
   this->sw_encode_ms_ = millis() - start;
+  // ESP-IDF reports the high-water mark in bytes
+  this->sw_stack_free_ = uxTaskGetStackHighWaterMark(nullptr);
+  // The JPEG stays in the encoder's output buffer; loop() publishes it from there.
   this->sw_state_.store(SW_DONE, std::memory_order_release);
 }
 #endif
