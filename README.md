@@ -16,7 +16,7 @@ display's microphone to the doorbell's speaker.
 | Path | What it is |
 | --- | --- |
 | [`components/jpeg_stream`](components/jpeg_stream) | ESPHome external component: receives an MJPEG stream (or repeated JPEG snapshots) in a background task and decodes every frame with the ESP32-P4 hardware JPEG decoder onto an LVGL canvas |
-| [`components/lvgl_screenshot`](components/lvgl_screenshot) | ESPHome external component: shows the LVGL screen as a camera in Home Assistant, encoded with the ESP32-P4 hardware JPEG encoder, only when Home Assistant asks for a picture |
+| [`components/lvgl_screenshot`](components/lvgl_screenshot) | ESPHome external component: shows the LVGL screen as a camera in Home Assistant, only when Home Assistant asks for a picture. ESP32-P4: hardware JPEG encoder; ESP32-S3 and other ESP32s: software JPEG (`camera_encoder`) in its own task |
 | [`components/go2rtc_talkback`](components/go2rtc_talkback) | ESPHome external component: talk back through a camera; serves the microphone as a WAV and lets go2rtc play it on the camera's two-way audio channel |
 | [`example/doorbell.yaml`](example/doorbell.yaml) | Package with the doorbell page, the scripts, the audio and the fallback to Home Assistant snapshots |
 | [`example/waveshare-p4-7b.yaml`](example/waveshare-p4-7b.yaml) | Complete device configuration for the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B |
@@ -58,8 +58,12 @@ external_components:
 
 lvgl_screenshot:
   name: "Screen"          # becomes camera.<device>_screen in Home Assistant
-  jpeg_quality: 85        # 10–100
+  jpeg_quality: 85        # 10–100, ESP32-P4 only
 ```
+
+The same works on an ESP32-S3 (or any ESP32) with LVGL: leave out `jpeg_quality`; the picture is then
+encoded in software by ESPHome's `camera_encoder` in a background task. Add a `camera_encoder:` block
+with `quality:` to change its quality.
 
 Home Assistant then shows the display as a camera. A picture is only made when Home Assistant asks
 for one. See [Screenshot of the display](docs/MANUAL.md#optional-screenshot-of-the-display) in the manual.
