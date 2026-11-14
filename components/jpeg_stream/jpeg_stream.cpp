@@ -20,12 +20,14 @@ namespace esphome::jpeg_stream {
 ESPHOME_LOG_TAG(TAG, "jpeg_stream");
 
 static constexpr uint32_t TASK_STACK_SIZE = 8192;  // TLS handshakes run in this task
-static constexpr UBaseType_t TASK_PRIORITY = 1;     // same as the main loop task
+static constexpr UBaseType_t TASK_PRIORITY = 1;    // same as the main loop task
 static constexpr uint32_t RETRY_DELAY_MS = 1000;
 static constexpr size_t MAX_URL_LENGTH = 512;
 static constexpr size_t RX_BUFFER_SIZE = 4096;
 static constexpr size_t MAX_PART_HEADER = 512;
+#ifdef USE_JPEG_STREAM_HW_DECODER
 static constexpr int DECODER_TIMEOUT_MS = 200;
+#endif
 // open_(), read_image_(), read_stream_(), decode_() and present_() return 0, an esp_err_t, or
 // HTTP_STATUS_BASE + the HTTP status code.
 static constexpr int HTTP_STATUS_BASE = 1000000;
@@ -45,9 +47,10 @@ void JpegStream::dump_config() {
                 "  Max JPEG size: %" PRIu32 " bytes\n"
                 "  Timeout: %" PRIu32 " ms\n"
                 "  Min interval: %" PRIu32 " ms\n"
-                "  Stats interval: %" PRIu32 " ms",
+                "  Stats interval: %" PRIu32 " ms\n"
+                "  Decoder: %s",
                 this->max_width_, this->max_height_, this->max_jpeg_size_, this->timeout_, this->min_interval_,
-                this->stats_interval_);
+                this->stats_interval_, this->hardware_decoder_ ? "hardware (ESP32-P4)" : "software (JPEGDEC)");
 }
 
 void JpegStream::set_url(const std::string &url) {
@@ -63,13 +66,29 @@ bool JpegStream::allocate_() {
     return true;
   this->jpeg_buf_ = static_cast<uint8_t *>(heap_caps_malloc(this->max_jpeg_size_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   this->rx_buf_ = static_cast<uint8_t *>(heap_caps_malloc(RX_BUFFER_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-  // The decoder writes whole MCU blocks (up to 16x16 pixels), so round the frame size up.
+  // The hardware decoder writes whole MCU blocks (up to 16x16 pixels), so round the frame size up.
   const size_t frame_size = align_up(this->max_width_, 16) * align_up(this->max_height_, 16) * 2;
-  jpeg_decode_memory_alloc_cfg_t mem_cfg = {.buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER};
-  for (auto &buf : this->frame_buf_)
-    buf = static_cast<uint8_t *>(jpeg_alloc_decoder_mem(frame_size, &mem_cfg, &this->frame_buf_size_));
+  bool decoder_ok = true;
+#ifdef USE_JPEG_STREAM_HW_DECODER
+  if (this->hardware_decoder_) {
+    jpeg_decode_memory_alloc_cfg_t mem_cfg = {.buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER};
+    for (auto &buf : this->frame_buf_)
+      buf = static_cast<uint8_t *>(jpeg_alloc_decoder_mem(frame_size, &mem_cfg, &this->frame_buf_size_));
+  }
+#endif
+#ifdef USE_JPEG_STREAM_SW_DECODER
+  if (!this->hardware_decoder_) {
+    // JPEGDEC writes rows straight into the frame (framebuffer mode); 16-byte alignment suits its SIMD code.
+    for (auto &buf : this->frame_buf_)
+      buf = static_cast<uint8_t *>(heap_caps_aligned_alloc(16, frame_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    this->frame_buf_size_ = frame_size;
+    if (!this->jpegdec_)
+      this->jpegdec_ = RAMAllocator<JPEGDEC>().make_unique();
+    decoder_ok = static_cast<bool>(this->jpegdec_);
+  }
+#endif
   if (this->jpeg_buf_ == nullptr || this->rx_buf_ == nullptr || this->frame_buf_[0] == nullptr ||
-      this->frame_buf_[1] == nullptr) {
+      this->frame_buf_[1] == nullptr || !decoder_ok) {
     ESP_LOGE(TAG, "Could not allocate buffers (%u + 2 x %u bytes)", (unsigned) this->max_jpeg_size_,
              (unsigned) frame_size);
     heap_caps_free(this->jpeg_buf_);
@@ -82,6 +101,7 @@ bool JpegStream::allocate_() {
   return true;
 }
 
+#ifdef USE_JPEG_STREAM_HW_DECODER
 bool JpegStream::create_decoder_() {
   jpeg_decode_engine_cfg_t engine_cfg = {.intr_priority = 0, .timeout_ms = DECODER_TIMEOUT_MS};
   const esp_err_t err = jpeg_new_decoder_engine(&engine_cfg, &this->decoder_);
@@ -92,12 +112,15 @@ bool JpegStream::create_decoder_() {
   }
   return true;
 }
+#endif
 
 void JpegStream::start() {
   if (this->canvas_ == nullptr || !this->allocate_())
     return;
-  if (this->decoder_ == nullptr && !this->create_decoder_())
+#ifdef USE_JPEG_STREAM_HW_DECODER
+  if (this->hardware_decoder_ && this->decoder_ == nullptr && !this->create_decoder_())
     return;
+#endif
   if (this->task_ == nullptr) {
     if (xTaskCreate(JpegStream::task_entry_, "jpeg_stream", TASK_STACK_SIZE, this, TASK_PRIORITY, &this->task_) !=
         pdPASS) {
@@ -238,8 +261,8 @@ void JpegStream::log_stats_() {
     const float seconds = (now - this->stats_start_) / 1000.0f;
     const auto avg_ms = [](uint32_t sum_us, uint32_t count) { return count ? sum_us / 1000.0f / count : 0.0f; };
     ESP_LOGI(TAG,
-             "Stats over %.1f s: %.1f fps shown (%" PRIu32 " shown, %" PRIu32 " received, %" PRIu32
-             " skipped, %" PRIu32 " errors)\n"
+             "Stats over %.1f s: %.1f fps shown (%" PRIu32 " shown, %" PRIu32 " received, %" PRIu32 " skipped, %" PRIu32
+             " errors)\n"
              "  JPEG size: avg %.1f KB, %.0f KB/s\n"
              "  Receive:   avg %.1f ms, max %.1f ms\n"
              "  Decode:    avg %.1f ms, max %.1f ms\n"
@@ -351,7 +374,7 @@ int JpegStream::open_(const char *url) {
     config.url = url;
     config.timeout_ms = (int) this->timeout_;
     config.buffer_size = RX_BUFFER_SIZE;
-    config.buffer_size_tx = 1024;  // the camera proxy URL carries a long access token
+    config.buffer_size_tx = 1024;             // the camera proxy URL carries a long access token
     config.auth_type = HTTP_AUTH_TYPE_BASIC;  // only used when the URL has user:password@
     config.event_handler = JpegStream::http_event_;
     config.user_data = this;
@@ -541,6 +564,28 @@ void JpegStream::add_receive_stats_(uint32_t took_us, size_t bytes) {
 }
 
 int JpegStream::decode_(uint8_t target) {
+  const uint32_t decode_start = micros();
+  int result = ESP_ERR_NOT_SUPPORTED;
+#ifdef USE_JPEG_STREAM_HW_DECODER
+  if (this->hardware_decoder_)
+    result = this->decode_hardware_(target);
+#endif
+#ifdef USE_JPEG_STREAM_SW_DECODER
+  if (!this->hardware_decoder_)
+    result = this->decode_software_(target);
+#endif
+  if (result != 0)
+    return result;
+  const uint32_t took = micros() - decode_start;
+  LockGuard guard(this->stats_mutex_);
+  this->task_stats_.decoded++;
+  this->task_stats_.decode_us += took;
+  this->task_stats_.decode_us_max = std::max(this->task_stats_.decode_us_max, took);
+  return 0;
+}
+
+#ifdef USE_JPEG_STREAM_HW_DECODER
+int JpegStream::decode_hardware_(uint8_t target) {
   jpeg_decode_picture_info_t info = {};
   esp_err_t err = jpeg_decoder_get_info(this->jpeg_buf_, this->jpeg_len_, &info);
   if (err != ESP_OK)
@@ -554,7 +599,6 @@ int JpegStream::decode_(uint8_t target) {
       .conv_std = JPEG_YUV_RGB_CONV_STD_BT601,
   };
   uint32_t out_size = 0;
-  const uint32_t decode_start = micros();
   err = jpeg_decoder_process(this->decoder_, &cfg, this->jpeg_buf_, this->jpeg_len_, this->frame_buf_[target],
                              this->frame_buf_size_, &out_size);
   if (err != ESP_OK) {
@@ -568,14 +612,6 @@ int JpegStream::decode_(uint8_t target) {
     if (err != ESP_OK)
       return err;
   }
-  {
-    const uint32_t took = micros() - decode_start;
-    LockGuard guard(this->stats_mutex_);
-    this->task_stats_.decoded++;
-    this->task_stats_.decode_us += took;
-    this->task_stats_.decode_us_max = std::max(this->task_stats_.decode_us_max, took);
-  }
-
   // Rows are padded to whole MCU blocks: 16 pixels wide for 4:2:0 and 4:2:2, otherwise 8.
   const bool wide_mcu =
       info.sample_method == JPEG_DOWN_SAMPLING_YUV420 || info.sample_method == JPEG_DOWN_SAMPLING_YUV422;
@@ -585,6 +621,37 @@ int JpegStream::decode_(uint8_t target) {
   this->ready_stride_ = row_pixels * 2;
   return 0;
 }
+#endif
+
+#ifdef USE_JPEG_STREAM_SW_DECODER
+// Framebuffer mode never calls the draw callback, but JPEGDEC needs one.
+int JpegStream::draw_software_(JPEGDRAW *draw) { return 1; }
+
+int JpegStream::decode_software_(uint8_t target) {
+  JPEGDEC *jpeg = this->jpegdec_.get();
+  if (!jpeg->openRAM(this->jpeg_buf_, (int) this->jpeg_len_, JpegStream::draw_software_))
+    return ESP_ERR_INVALID_RESPONSE;
+  const int width = jpeg->getWidth();
+  const int height = jpeg->getHeight();
+  if (width <= 0 || height <= 0 || width > this->max_width_ || height > this->max_height_) {
+    jpeg->close();
+    return ESP_ERR_INVALID_SIZE;
+  }
+  // RGB565 little endian, as LVGL expects. setFramebuffer() has to come after openRAM(): JPEGDEC then
+  // writes every row of the image straight into the frame, width pixels apart.
+  jpeg->setPixelType(RGB565_LITTLE_ENDIAN);
+  jpeg->setFramebuffer(this->frame_buf_[target]);
+  const int ok = jpeg->decode(0, 0, 0);
+  const int error = jpeg->getLastError();
+  jpeg->close();
+  if (!ok)
+    return error == JPEG_UNSUPPORTED_FEATURE ? ESP_ERR_NOT_SUPPORTED : ESP_ERR_INVALID_RESPONSE;
+  this->ready_width_ = width;
+  this->ready_height_ = height;
+  this->ready_stride_ = width * 2;
+  return 0;
+}
+#endif
 
 }  // namespace esphome::jpeg_stream
 

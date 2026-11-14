@@ -1,4 +1,4 @@
-"""Show JPEG frames from an HTTP(S) URL on an LVGL canvas (ESP32-P4 only).
+"""Show JPEG frames from an HTTP(S) URL on an LVGL canvas.
 
 The URL can point to
 - an MJPEG stream (multipart/x-mixed-replace, e.g. go2rtc /api/stream.mjpeg): one connection,
@@ -8,9 +8,12 @@ The URL can point to
 The kind is taken from the Content-Type of the response. Credentials in the URL
 (http://user:password@host/...) are sent as HTTP Basic authentication.
 
-A background task receives the images and decodes them with the ESP32-P4 hardware JPEG decoder,
-so the main loop is never blocked by networking or decoding. Each frame is shown as soon as it is
-decoded; a frame that arrives while the previous one is not shown yet is skipped (lowest latency).
+A background task receives the images and decodes them, so the main loop is never blocked by
+networking or decoding. Decoder: the ESP32-P4 hardware JPEG decoder (default on the P4), or the
+JPEGDEC software decoder that ESPHome's runtime_image also uses (default on other ESP32s, and
+`decoder: software` on the P4). On the ESP32-S3 JPEGDEC uses the chip's SIMD instructions.
+Each frame is shown as soon as it is decoded; a frame that arrives while the previous one is not
+shown yet is skipped (lowest latency).
 
 With stats_interval set, it logs where the time goes (receive, decode, hand-off to the main loop,
 LVGL refresh) every interval while the stream runs; see docs/PERFORMANCE.md.
@@ -34,6 +37,7 @@ DOMAIN = "jpeg_stream"
 MULTI_CONF = True
 
 CONF_CANVAS = "canvas"
+CONF_DECODER = "decoder"
 CONF_MAX_HEIGHT = "max_height"
 CONF_MAX_JPEG_SIZE = "max_jpeg_size"
 CONF_MAX_WIDTH = "max_width"
@@ -41,8 +45,24 @@ CONF_MIN_INTERVAL = "min_interval"
 CONF_ON_FRAME = "on_frame"
 CONF_STATS_INTERVAL = "stats_interval"
 
+DECODER_HARDWARE = "hardware"
+DECODER_SOFTWARE = "software"
+
 jpeg_stream_ns = cg.esphome_ns.namespace("jpeg_stream")
 JpegStream = jpeg_stream_ns.class_("JpegStream", cg.Component)
+
+
+def _validate_decoder(config: ConfigType) -> ConfigType:
+    is_p4 = esp32.get_esp32_variant() == VARIANT_ESP32P4
+    if CONF_DECODER not in config:
+        config[CONF_DECODER] = DECODER_HARDWARE if is_p4 else DECODER_SOFTWARE
+    elif config[CONF_DECODER] == DECODER_HARDWARE and not is_p4:
+        raise cv.Invalid(
+            "The hardware JPEG decoder only exists on the ESP32-P4; use 'software'",
+            path=[CONF_DECODER],
+        )
+    return config
+
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
@@ -50,6 +70,10 @@ CONFIG_SCHEMA = cv.All(
             cv.GenerateID(): cv.declare_id(JpegStream),
             cv.Required(CONF_CANVAS): cv.use_id(lv_canvas_t),
             cv.Optional(CONF_URL): cv.url,
+            # Default: hardware on the ESP32-P4, software elsewhere
+            cv.Optional(CONF_DECODER): cv.one_of(
+                DECODER_HARDWARE, DECODER_SOFTWARE, lower=True
+            ),
             cv.Optional(CONF_MAX_WIDTH, default=640): cv.int_range(min=16, max=1920),
             cv.Optional(CONF_MAX_HEIGHT, default=480): cv.int_range(min=16, max=1920),
             cv.Optional(CONF_MAX_JPEG_SIZE, default=262144): cv.int_range(
@@ -69,10 +93,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_ON_ERROR): automation.validate_automation({}),
         }
     ).extend(cv.COMPONENT_SCHEMA),
-    esp32.only_on_variant(
-        supported=[VARIANT_ESP32P4],
-        msg_prefix="jpeg_stream (hardware JPEG decoder)",
-    ),
+    _validate_decoder,
 )
 
 _CALLBACK_AUTOMATIONS = (
@@ -137,4 +158,18 @@ async def to_code(config: ConfigType) -> None:
     # esp_http_client (plus esp-tls) and the root certificate bundle for https URLs
     esp32.request_http_client()
     esp32.require_certificate_bundle()
-    esp32.include_builtin_idf_component("esp_driver_jpeg")
+
+    if config[CONF_DECODER] == DECODER_HARDWARE:
+        cg.add_define("USE_JPEG_STREAM_HW_DECODER")
+        cg.add(var.set_hardware_decoder(True))
+        esp32.include_builtin_idf_component("esp_driver_jpeg")
+    else:
+        cg.add_define("USE_JPEG_STREAM_SW_DECODER")
+        # The same JPEGDEC build as runtime_image (online_image), so both can be used together.
+        # It uses the ESP32-S3 SIMD colour conversion, which needs the esp-dsp headers.
+        cg.add_library(
+            "JPEGDEC",
+            "1.8.4",
+            "https://github.com/esphome-libs/JPEGDEC#1.8.4-esphome.4",
+        )
+        esp32.add_idf_component(name="espressif/esp-dsp", ref="1.8.2")

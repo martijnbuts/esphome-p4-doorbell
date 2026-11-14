@@ -9,17 +9,24 @@
 #include <freertos/task.h>
 #include <lvgl.h>
 
-#include "driver/jpeg_decode.h"
 #include "esp_http_client.h"
 
 #include "esphome/core/component.h"
+#include "esphome/core/defines.h"
 #include "esphome/core/helpers.h"
+
+#ifdef USE_JPEG_STREAM_HW_DECODER
+#include "driver/jpeg_decode.h"
+#endif
+#ifdef USE_JPEG_STREAM_SW_DECODER
+#include <JPEGDEC.h>
+#endif
 
 namespace esphome::jpeg_stream {
 
 /// Receives JPEG frames from an URL in a background task (an MJPEG stream, or a single image that is
-/// fetched again and again), decodes them with the ESP32-P4 hardware JPEG decoder and shows each frame
-/// on an LVGL canvas. The main loop only swaps the canvas buffer.
+/// fetched again and again), decodes them in that task (ESP32-P4 hardware JPEG decoder, or JPEGDEC in
+/// software) and shows each frame on an LVGL canvas. The main loop only swaps the canvas buffer.
 class JpegStream : public Component {
  public:
   JpegStream(uint16_t max_width, uint16_t max_height, uint32_t max_jpeg_size)
@@ -35,6 +42,8 @@ class JpegStream : public Component {
   void set_min_interval(uint32_t interval_ms) { this->min_interval_ = interval_ms; }
   /// Log performance statistics every interval while the stream runs (0 = off).
   void set_stats_interval(uint32_t interval_ms) { this->stats_interval_ = interval_ms; }
+  /// Decode with the ESP32-P4 hardware JPEG decoder instead of JPEGDEC.
+  void set_hardware_decoder(bool hardware) { this->hardware_decoder_ = hardware; }
 
   /// Thread-safe; the new URL is used for the next frame (an open MJPEG stream is reconnected).
   void set_url(const std::string &url);
@@ -69,6 +78,14 @@ class JpegStream : public Component {
   int read_image_();
   int read_stream_();
   int decode_(uint8_t target);
+#ifdef USE_JPEG_STREAM_HW_DECODER
+  int decode_hardware_(uint8_t target);
+  bool create_decoder_();
+#endif
+#ifdef USE_JPEG_STREAM_SW_DECODER
+  int decode_software_(uint8_t target);
+  static int draw_software_(JPEGDRAW *draw);
+#endif
   /// Decodes jpeg_buf_ into the free frame buffer and hands it to the main loop.
   int present_(uint32_t begin);
   void close_();
@@ -76,7 +93,6 @@ class JpegStream : public Component {
   void reset_stats_();
   void add_receive_stats_(uint32_t took_us, size_t bytes);
   static void display_event_(lv_event_t *event);
-  bool create_decoder_();
   void wait_while_running_(uint32_t ms);
 
   lv_obj_t *canvas_{nullptr};
@@ -86,6 +102,7 @@ class JpegStream : public Component {
   uint32_t timeout_{5000};
   uint32_t min_interval_{0};
   uint32_t stats_interval_{0};
+  bool hardware_decoder_{false};
 
   Mutex url_mutex_;
   std::string url_;
@@ -93,14 +110,20 @@ class JpegStream : public Component {
 
   TaskHandle_t task_{nullptr};
   esp_http_client_handle_t client_{nullptr};
-  std::string origin_;         // scheme://[user:password@]host[:port] the client was created for
-  bool connected_{false};      // the client holds an open connection that can be reused
-  bool multipart_{false};      // the current response is an MJPEG stream
-  char content_type_[64]{};    // Content-Type of the current response
-  uint8_t *rx_buf_{nullptr};   // receive buffer for MJPEG streams
+  std::string origin_;        // scheme://[user:password@]host[:port] the client was created for
+  bool connected_{false};     // the client holds an open connection that can be reused
+  bool multipart_{false};     // the current response is an MJPEG stream
+  char content_type_[64]{};   // Content-Type of the current response
+  uint8_t *rx_buf_{nullptr};  // receive buffer for MJPEG streams
+#ifdef USE_JPEG_STREAM_HW_DECODER
   jpeg_decoder_handle_t decoder_{nullptr};
+#endif
+#ifdef USE_JPEG_STREAM_SW_DECODER
+  // JPEGDEC state (some 20 kB, PSRAM when there is any), created on the first start()
+  RAMUniquePtr<JPEGDEC> jpegdec_;
+#endif
 
-  // Compressed image (PSRAM) and two decoded RGB565 frames (PSRAM, aligned for the decoder's DMA)
+  // Compressed image (PSRAM) and two decoded RGB565 frames (PSRAM, aligned for the decoder)
   uint8_t *jpeg_buf_{nullptr};
   size_t jpeg_len_{0};
   uint8_t *frame_buf_[2]{nullptr, nullptr};
@@ -129,12 +152,12 @@ class JpegStream : public Component {
   // Statistics. TaskStats is written by the stream task under stats_mutex_; the rest is only used
   // in the main loop (loop() and the LVGL display events, which run from the LVGL timer handler).
   struct TaskStats {
-    uint32_t received{0};        // complete JPEGs received
-    uint32_t bytes{0};           // their total size
-    uint32_t receive_us{0};      // receive time: request (single image) or part start (MJPEG) -> last byte
+    uint32_t received{0};    // complete JPEGs received
+    uint32_t bytes{0};       // their total size
+    uint32_t receive_us{0};  // receive time: request (single image) or part start (MJPEG) -> last byte
     uint32_t receive_us_max{0};
-    uint32_t decoded{0};         // JPEGs decoded by the hardware decoder
-    uint32_t decode_us{0};       // jpeg_decoder_process() time
+    uint32_t decoded{0};    // JPEGs decoded
+    uint32_t decode_us{0};  // decode time
     uint32_t decode_us_max{0};
   };
   Mutex stats_mutex_;
@@ -144,18 +167,18 @@ class JpegStream : public Component {
   uint32_t stats_dropped_start_{0};
   uint32_t stats_shown_{0};
   uint32_t stats_errors_{0};
-  uint32_t handoff_us_{0};       // ready_ set by the task -> frame put on the canvas in loop()
+  uint32_t handoff_us_{0};  // ready_ set by the task -> frame put on the canvas in loop()
   uint32_t handoff_us_max_{0};
   uint32_t last_shown_us_{0};
-  uint32_t gap_us_max_{0};       // longest time between two frames on the canvas
+  uint32_t gap_us_max_{0};  // longest time between two frames on the canvas
   uint32_t refresh_start_us_{0};
   bool refresh_rendered_{false};
-  uint32_t refreshes_{0};        // LVGL refresh cycles that rendered something
-  uint32_t refresh_us_{0};       // LVGL refresh time: layout + render + flush to the display
+  uint32_t refreshes_{0};   // LVGL refresh cycles that rendered something
+  uint32_t refresh_us_{0};  // LVGL refresh time: layout + render + flush to the display
   uint32_t refresh_us_max_{0};
   uint32_t flush_start_us_{0};
-  uint32_t refresh_flush_us_{0}; // flush_cb time within the current refresh
-  uint32_t flush_us_{0};         // flush_cb time (copy to the display) summed over the window
+  uint32_t refresh_flush_us_{0};  // flush_cb time within the current refresh
+  uint32_t flush_us_{0};          // flush_cb time (copy to the display) summed over the window
   bool display_events_added_{false};
 
   CallbackManager<void()> frame_callback_;
