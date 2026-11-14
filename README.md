@@ -15,7 +15,7 @@ display's microphone to the doorbell's speaker.
 
 | Path | What it is |
 | --- | --- |
-| [`components/jpeg_stream`](components/jpeg_stream) | ESPHome external component: receives an MJPEG stream (or repeated JPEG snapshots) in a background task and decodes every frame with the ESP32-P4 hardware JPEG decoder onto an LVGL canvas |
+| [`components/jpeg_stream`](components/jpeg_stream) | ESPHome external component: receives an MJPEG stream (or repeated JPEG snapshots) in a background task and decodes every frame onto an LVGL canvas: ESP32-P4 hardware JPEG decoder, or JPEGDEC in software on the ESP32-S3 and other ESP32s. Standalone description and upstream proposal: [components/jpeg_stream/README.md](components/jpeg_stream/README.md) |
 | [`components/lvgl_screenshot`](components/lvgl_screenshot) | ESPHome external component: shows the LVGL screen as a camera in Home Assistant, only when Home Assistant asks for a picture. ESP32-P4: hardware JPEG encoder; ESP32-S3 and other ESP32s: software JPEG (`camera_encoder`) in its own task. Standalone description and upstream proposal: [components/lvgl_screenshot/README.md](components/lvgl_screenshot/README.md) |
 | [`components/go2rtc_talkback`](components/go2rtc_talkback) | ESPHome external component: talk back through a camera; serves the microphone as a WAV and lets go2rtc play it on the camera's two-way audio channel |
 | [`example/doorbell.yaml`](example/doorbell.yaml) | Package with the doorbell page, the scripts, the audio and the fallback to Home Assistant snapshots |

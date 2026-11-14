@@ -79,26 +79,32 @@ Condition: `jpeg_stream.is_running`.
 
 ## Measured
 
-Doorbell: Reolink D340P sub-stream (640×480, 10 fps) as MJPEG from go2rtc, 13–22 kB per frame,
-on a Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024×600 display).
+Doorbell: Reolink D340P sub-stream (640×480, 10 fps) as MJPEG from go2rtc, 13–22 kB per frame.
 
-| | `hardware` (ESP32-P4) | `software` (JPEGDEC on the ESP32-P4) |
+| | `hardware`: ESP32-P4, 1024×600 MIPI DSI | `software`: ESP32-S3 (JPEGDEC), 800×480 RGB panel |
 | --- | --- | --- |
-| Frames shown | MEASURE_HW_FPS | MEASURE_SW_FPS |
-| Decode per frame (task) | MEASURE_HW_DECODE | MEASURE_SW_DECODE |
-| Receive per frame (task) | MEASURE_HW_RECEIVE | MEASURE_SW_RECEIVE |
-| LVGL refresh per frame (main loop) | MEASURE_HW_REFRESH | MEASURE_SW_REFRESH |
+| Frames shown | 10.0 fps (every frame) | 7.5 fps (about 1 in 4 skipped) |
+| Receive per frame (task) | 3.5 ms | 15 ms |
+| Decode per frame (task) | 3.5 ms | 70 ms |
+| LVGL refresh per frame (main loop) | 21–51 ms (see PERFORMANCE.md) | 109 ms, of which 39 ms copying to the panel |
+| First frame after `start()` | 119 ms | 117 ms |
+| Memory while streaming | about 1.5 MB PSRAM | about 1.7 MB PSRAM, internal RAM 160 → 153 kB free |
 
-Earlier, more detailed measurements of the hardware path (synthetic 30 and 60 fps sources,
-start-up time, CPU per task) are in [docs/PERFORMANCE.md](../../docs/PERFORMANCE.md). They show
-that the limit is the LVGL refresh of the 640×480 canvas in the main loop, not the network or the
-decoder.
+The ESP32-S3 numbers are averages over three 10 s windows on 14 November 2026 (no errors). On the
+S3 the limit is not the decoder but LVGL drawing the 640×480 canvas in the main loop: about 9
+refreshes per second at most, and the main loop's longest pass rose to 145 ms while the stream ran.
+A smaller picture (for example go2rtc scaling to 480×360) or `min_interval` lowers that load.
+
+The P4 numbers are from the more detailed measurements in [docs/PERFORMANCE.md](../../docs/PERFORMANCE.md)
+(12 October 2026; synthetic 30 and 60 fps sources, start-up time, CPU per task); the first-frame
+time was measured again on 14 November 2026 with this version.
 
 ## Tested on
 
-- ESP32-P4 (Waveshare ESP32-P4-WIFI6-Touch-LCD-7B), ESP-IDF 6.1, LVGL 9.6: `hardware` and
-  `software`, daily use since October 2026 (hardware)
-- ESP32-S3: `software` compiles and validates; not yet run on a device
+- ESP32-P4 (Waveshare ESP32-P4-WIFI6-Touch-LCD-7B), ESP-IDF 6.1, LVGL 9.6: `hardware`, in daily
+  use since October 2026
+- ESP32-S3 (N16R8, octal PSRAM) with an 800×480 RGB panel, ESP-IDF 5.5, LVGL 9.6: `software`,
+  live doorbell stream on 14 November 2026
 - ESPHome 2026.12.0-dev (14 November 2026)
 
 ## Limitations
@@ -106,7 +112,8 @@ decoder.
 - **MJPEG parts need a `Content-Length` header.** go2rtc sends one; a stream that only uses the
   boundary is refused (`ESP_ERR_NOT_SUPPORTED`).
 - **The canvas is drawn by LVGL in the main loop.** At 640×480 that takes 21–51 ms per frame on
-  the P4, depending on rotation, rounded corners and PPA use (see PERFORMANCE.md).
+  the P4 (depending on rotation, rounded corners and PPA use, see PERFORMANCE.md) and about
+  110 ms on the S3, above the 50 ms ESPHome allows a component per loop.
 - **Own HTTP client.** It uses `esp_http_client` directly, not ESPHome's `http_request` component,
   because it needs a long-running stream in its own task.
 - **ESP-IDF and PSRAM only.**
@@ -131,6 +138,9 @@ upstream better as pieces of what exists than as a new component:
 
 Open questions for the maintainers:
 
+- On chips without a 2D accelerator, LVGL drawing the frame costs more than decoding it (S3:
+  109 ms against 70 ms). Should a stream write straight into the display's frame buffer when
+  the picture is not covered by other widgets, or is drawing through LVGL the expected way?
 - Is a background task acceptable for `online_image`, or should streaming stay in the main loop
   with a time budget per loop (like the current decoding)?
 - Should the stream use `http_request`, which would need a streaming/long-running mode, or is a
