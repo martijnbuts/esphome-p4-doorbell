@@ -1,0 +1,12 @@
+psram:
+  mode: octal
+  speed: 80MHz
+
+display:
+  - platform: mipi_rgb
+    model: ESP32-8048S050
+
+camera_encoder:
+  quality: 85
+
+<<: !include common.yaml

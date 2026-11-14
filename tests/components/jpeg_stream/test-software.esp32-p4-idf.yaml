@@ -1,0 +1,37 @@
+psram:
+  speed: 200MHz
+
+esp32_hosted:
+  variant: esp32c6
+  clk_pin: GPIO18
+  cmd_pin: GPIO19
+  d0_pin: GPIO14
+  d1_pin: GPIO15
+  d2_pin: GPIO16
+  d3_pin: GPIO17
+  reset_pin: GPIO54
+
+esp_ldo:
+  - channel: 3
+    voltage: 2.5V
+
+display:
+  - platform: mipi_dsi
+    model: WAVESHARE-ESP32-P4-WIFI6-TOUCH-LCD-7B
+
+wifi:
+  ssid: MySSID
+  password: password1
+
+lvgl:
+  widgets:
+    - canvas:
+        id: video_canvas
+        width: 16
+        height: 16
+
+jpeg_stream:
+  - id: video_stream
+    canvas: video_canvas
+    decoder: software
+    url: http://192.168.1.10:1984/api/stream.mjpeg?src=camera

@@ -1,0 +1,49 @@
+wifi:
+  ssid: MySSID
+  password: password1
+
+lvgl:
+  pages:
+    - id: video_page
+      widgets:
+        - canvas:
+            id: video_canvas
+            width: 16
+            height: 16
+
+jpeg_stream:
+  - id: video_stream
+    canvas: video_canvas
+    url: http://192.168.1.10:1984/api/stream.mjpeg?src=camera
+    max_width: 640
+    max_height: 480
+    max_jpeg_size: 131072
+    timeout: 10s
+    min_interval: 50ms
+    stats_interval: 10s
+    on_frame:
+      - logger.log: Frame shown
+    on_error:
+      - logger.log: Frame failed
+
+button:
+  - platform: template
+    name: Start stream
+    on_press:
+      - jpeg_stream.start:
+          id: video_stream
+          url: !lambda 'return std::string("http://user:pass@192.168.1.10:1984/api/stream.mjpeg?src=camera");'
+  - platform: template
+    name: Set URL
+    on_press:
+      - jpeg_stream.set_url:
+          id: video_stream
+          url: https://example.com/api/camera_proxy/camera.front
+  - platform: template
+    name: Stop stream
+    on_press:
+      - if:
+          condition:
+            jpeg_stream.is_running: video_stream
+          then:
+            - jpeg_stream.stop: video_stream

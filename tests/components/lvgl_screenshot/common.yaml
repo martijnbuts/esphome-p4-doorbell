@@ -1,0 +1,15 @@
+wifi:
+  ssid: MySSID
+  password: password1
+
+api:
+
+lvgl:
+  widgets:
+    - label:
+        text: Hello
+        align: CENTER
+
+lvgl_screenshot:
+  name: Screen
+  stream_interval: 2s

@@ -6,6 +6,7 @@
 #include <string>
 
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <lvgl.h>
 
@@ -94,6 +95,8 @@ class JpegStream : public Component {
   void add_receive_stats_(uint32_t took_us, size_t bytes);
   static void display_event_(lv_event_t *event);
   void wait_while_running_(uint32_t ms);
+  /// Wakes the stream task when it waits for a frame to be shown, a retry delay, or a stop.
+  void wake_task_();
 
   lv_obj_t *canvas_{nullptr};
   uint16_t max_width_;
@@ -109,6 +112,8 @@ class JpegStream : public Component {
   std::atomic<bool> url_changed_{false};
 
   TaskHandle_t task_{nullptr};
+  SemaphoreHandle_t wake_{nullptr};      // given by the main loop: frame shown, stop(), new URL
+  std::atomic<uint32_t> stack_free_{0};  // bytes of the task's stack never used (high-water mark)
   esp_http_client_handle_t client_{nullptr};
   std::string origin_;        // scheme://[user:password@]host[:port] the client was created for
   bool connected_{false};     // the client holds an open connection that can be reused

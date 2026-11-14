@@ -54,11 +54,19 @@ void JpegStream::dump_config() {
 }
 
 void JpegStream::set_url(const std::string &url) {
+  if (url.size() >= MAX_URL_LENGTH)
+    ESP_LOGW(TAG, "URL is %zu characters; only the first %zu are used", url.size(), MAX_URL_LENGTH - 1);
   LockGuard guard(this->url_mutex_);
   if (url != this->url_) {
     this->url_ = url;
     this->url_changed_ = true;
   }
+  this->wake_task_();
+}
+
+void JpegStream::wake_task_() {
+  if (this->wake_ != nullptr)
+    xSemaphoreGive(this->wake_);
 }
 
 bool JpegStream::allocate_() {
@@ -121,6 +129,10 @@ void JpegStream::start() {
   if (this->hardware_decoder_ && this->decoder_ == nullptr && !this->create_decoder_())
     return;
 #endif
+  if (this->wake_ == nullptr && (this->wake_ = xSemaphoreCreateBinary()) == nullptr) {
+    ESP_LOGE(TAG, "Could not create the wake semaphore");
+    return;
+  }
   if (this->task_ == nullptr) {
     if (xTaskCreate(JpegStream::task_entry_, "jpeg_stream", TASK_STACK_SIZE, this, TASK_PRIORITY, &this->task_) !=
         pdPASS) {
@@ -150,7 +162,10 @@ void JpegStream::start() {
   }
 }
 
-void JpegStream::stop() { this->running_ = false; }
+void JpegStream::stop() {
+  this->running_ = false;
+  this->wake_task_();
+}
 
 void JpegStream::loop() {
   const int8_t index = this->ready_.load();
@@ -176,11 +191,13 @@ void JpegStream::loop() {
     if (this->first_frame_pending_) {
       // Startup time: connection, the source's first (key)frame, receive and decode
       this->first_frame_pending_ = false;
-      ESP_LOGI(TAG, "First frame %" PRIu32 " ms after start", this->last_shown_ms_ - this->start_ms_);
+      ESP_LOGI(TAG, "First frame %" PRIu32 " ms after start (task stack: %" PRIu32 " of %" PRIu32 " bytes never used)",
+               this->last_shown_ms_ - this->start_ms_, this->stack_free_.load(), TASK_STACK_SIZE);
     }
     this->stats_shown_++;
     this->shown_ = index;
     this->ready_ = -1;
+    this->wake_task_();  // the task may be waiting for this buffer
     this->frame_count_++;
     this->frame_callback_.call();
   }
@@ -260,24 +277,25 @@ void JpegStream::log_stats_() {
   if (now > this->stats_start_) {
     const float seconds = (now - this->stats_start_) / 1000.0f;
     const auto avg_ms = [](uint32_t sum_us, uint32_t count) { return count ? sum_us / 1000.0f / count : 0.0f; };
-    ESP_LOGI(TAG,
-             "Stats over %.1f s: %.1f fps shown (%" PRIu32 " shown, %" PRIu32 " received, %" PRIu32 " skipped, %" PRIu32
-             " errors)\n"
-             "  JPEG size: avg %.1f KB, %.0f KB/s\n"
-             "  Receive:   avg %.1f ms, max %.1f ms\n"
-             "  Decode:    avg %.1f ms, max %.1f ms\n"
-             "  Hand-off:  avg %.1f ms, max %.1f ms (task -> canvas in the main loop)\n"
-             "  Frame gap: max %.1f ms\n"
-             "  LVGL refresh: %" PRIu32 " x, avg %.1f ms, max %.1f ms (layout + render + flush)\n"
-             "  LVGL flush:   avg %.1f ms per refresh (flush_cb: copy to the display)",
-             seconds, this->stats_shown_ / seconds, this->stats_shown_, task.received,
-             dropped - this->stats_dropped_start_, this->stats_errors_,
-             task.received ? task.bytes / 1024.0f / task.received : 0.0f, task.bytes / 1024.0f / seconds,
-             avg_ms(task.receive_us, task.received), task.receive_us_max / 1000.0f,
-             avg_ms(task.decode_us, task.decoded), task.decode_us_max / 1000.0f,
-             avg_ms(this->handoff_us_, this->stats_shown_), this->handoff_us_max_ / 1000.0f,
-             this->gap_us_max_ / 1000.0f, this->refreshes_, avg_ms(this->refresh_us_, this->refreshes_),
-             this->refresh_us_max_ / 1000.0f, avg_ms(this->flush_us_, this->refreshes_));
+    ESP_LOGI(
+        TAG,
+        "Stats over %.1f s: %.1f fps shown (%" PRIu32 " shown, %" PRIu32 " received, %" PRIu32 " skipped, %" PRIu32
+        " errors)\n"
+        "  JPEG size: avg %.1f KB, %.0f KB/s\n"
+        "  Receive:   avg %.1f ms, max %.1f ms\n"
+        "  Decode:    avg %.1f ms, max %.1f ms\n"
+        "  Hand-off:  avg %.1f ms, max %.1f ms (task -> canvas in the main loop)\n"
+        "  Frame gap: max %.1f ms\n"
+        "  LVGL refresh: %" PRIu32 " x, avg %.1f ms, max %.1f ms (layout + render + flush)\n"
+        "  LVGL flush:   avg %.1f ms per refresh (flush_cb: copy to the display)\n"
+        "  Task stack:   %" PRIu32 " of %" PRIu32 " bytes never used",
+        seconds, this->stats_shown_ / seconds, this->stats_shown_, task.received, dropped - this->stats_dropped_start_,
+        this->stats_errors_, task.received ? task.bytes / 1024.0f / task.received : 0.0f,
+        task.bytes / 1024.0f / seconds, avg_ms(task.receive_us, task.received), task.receive_us_max / 1000.0f,
+        avg_ms(task.decode_us, task.decoded), task.decode_us_max / 1000.0f,
+        avg_ms(this->handoff_us_, this->stats_shown_), this->handoff_us_max_ / 1000.0f, this->gap_us_max_ / 1000.0f,
+        this->refreshes_, avg_ms(this->refresh_us_, this->refreshes_), this->refresh_us_max_ / 1000.0f,
+        avg_ms(this->flush_us_, this->refreshes_), this->stack_free_.load(), TASK_STACK_SIZE);
   }
   this->reset_stats_();
 }
@@ -285,8 +303,14 @@ void JpegStream::log_stats_() {
 void JpegStream::task_entry_(void *arg) { static_cast<JpegStream *>(arg)->run_task_(); }
 
 void JpegStream::wait_while_running_(uint32_t ms) {
-  for (uint32_t waited = 0; waited < ms && this->running_; waited += 50)
-    vTaskDelay(pdMS_TO_TICKS(50));
+  // Returns early on stop(); a wake for another reason (frame shown, new URL) just waits on.
+  const uint32_t start = millis();
+  while (this->running_) {
+    const uint32_t waited = millis() - start;
+    if (waited >= ms)
+      return;
+    xSemaphoreTake(this->wake_, pdMS_TO_TICKS(ms - waited));
+  }
 }
 
 void JpegStream::run_task_() {
@@ -538,9 +562,10 @@ int JpegStream::read_stream_() {
 }
 
 int JpegStream::present_(uint32_t begin) {
-  // Wait until the main loop has shown the previous frame before reusing its buffer.
+  // Wait until the main loop has shown the previous frame before reusing its buffer. The main loop
+  // gives wake_ as soon as it has; the timeout only guards against a missed wake.
   while (this->running_ && this->ready_ >= 0)
-    vTaskDelay(pdMS_TO_TICKS(5));
+    xSemaphoreTake(this->wake_, pdMS_TO_TICKS(100));
   if (!this->running_)
     return 0;
   const uint8_t target = this->shown_ == 0 ? 1 : 0;
@@ -550,6 +575,8 @@ int JpegStream::present_(uint32_t begin) {
   this->last_present_ = millis();
   this->last_frame_time_ = this->last_present_ - begin;
   this->ready_at_us_ = micros();
+  // ESP-IDF reports the high-water mark in bytes
+  this->stack_free_ = uxTaskGetStackHighWaterMark(nullptr);
   this->ready_ = target;
   App.wake_loop_threadsafe();
   return 0;
@@ -625,7 +652,7 @@ int JpegStream::decode_hardware_(uint8_t target) {
 
 #ifdef USE_JPEG_STREAM_SW_DECODER
 // Framebuffer mode never calls the draw callback, but JPEGDEC needs one.
-int JpegStream::draw_software_(JPEGDRAW *draw) { return 1; }
+int JpegStream::draw_software_(JPEGDRAW * /*draw*/) { return 1; }
 
 int JpegStream::decode_software_(uint8_t target) {
   JPEGDEC *jpeg = this->jpegdec_.get();
