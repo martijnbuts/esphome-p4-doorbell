@@ -75,13 +75,19 @@ previous one.
 
 | | ESP32-P4, 1024×600 (hardware) | ESP32-S3, 800×480 (software) |
 | --- | --- | --- |
-| Render (`lv_snapshot`, main loop) | MEASURE_P4_RENDER | MEASURE_S3_RENDER |
-| JPEG encode | MEASURE_P4_JPEG (main loop) | MEASURE_S3_JPEG (own task) |
-| JPEG size, dashboard | MEASURE_P4_SIZE | MEASURE_S3_SIZE |
-| Encoding task stack never used | – | MEASURE_S3_STACK of 6144 bytes |
+| Render (`lv_snapshot`, main loop) | 76 ms | 125 ms |
+| JPEG encode | 12 ms (main loop) | 425 ms (own task) |
+| JPEG size, dashboard | 115 kB (quality 85) | 70 kB (quality 85) |
+| Encoding task stack never used | – | 3828 of 6144 bytes |
 
-The first screenshot after boot logs these numbers at INFO, later ones at DEBUG:
-`First screenshot 800x480, … bytes (render … ms, jpeg … ms)`.
+Measured on 14 November 2026 with the dashboards shown on these displays. The first screenshot
+after boot logs these numbers at INFO, later ones at DEBUG:
+`First screenshot 800x480, 69958 bytes (render 125 ms, jpeg 425 ms)`.
+
+The render step is the weak point: on both chips it is above the 50 ms ESPHome allows a
+component per loop (on the S3 ESPHome logged `lvgl_screenshot took a long time for an
+operation (125 ms), max is 50 ms`). Moving the encoder to a task fixed the much longer
+encode, but rendering still has to happen where LVGL runs. See the open questions below.
 
 ## Tested on
 
@@ -93,8 +99,8 @@ The first screenshot after boot logs these numbers at INFO, later ones at DEBUG:
 
 - **Only the active screen.** Widgets on LVGL's top and system layers (for example a message
   box on `lv_layer_top`) are not in the picture.
-- **Rendering runs in the main loop**, so a screenshot briefly holds it up. The time grows with
-  the screen size and how much is on the screen (see *Measured*).
+- **Rendering runs in the main loop**, so a screenshot holds it up for 76–125 ms on the tested
+  displays (see *Measured*). Keep `stream_interval` at 1 s or more.
 - **ESP32-P4: the screen size must be a multiple of 8** in both directions (4:4:4 JPEG blocks).
   Otherwise no picture is made and the log says so. The software encoder has no such limit.
 - **ESP32-P4: the JPEG engine is shared** with the hardware JPEG decoder. The driver serialises
@@ -115,8 +121,18 @@ pieces:
    `camera_encoder`, always encoding outside the main loop. That removes the
    `jpeg_quality`/`quality` split between the P4 and other chips.
 
+Related work: [n-IA-hane/esphome-screenshot](https://github.com/n-IA-hane/esphome-screenshot)
+captures LVGL during a normal refresh (or the P4 MIPI DSI framebuffer), encodes in software and
+serves the JPEG over HTTP. This component instead renders on request and uses ESPHome's camera
+entity, so the picture goes over the native API without the web server.
+
 Open questions for the maintainers:
 
+- **How to avoid the long render in the main loop?** `lv_snapshot` renders the whole screen in
+  one call. Options I see: render a few rows per loop with a clipped area, capture the pixels
+  during LVGL's normal refresh (the flush callback sees every rendered area; this saves the
+  second render but needs a full refresh and only works when the display driver gets all
+  pixels), or accept it for an on-demand diagnostic feature.
 - Should the screenshot camera be its own component, or part of `lvgl` (for example a
   `camera` option on the `lvgl:` block)?
 - Should the top and system layers be included in the picture?
