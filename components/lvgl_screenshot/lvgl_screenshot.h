@@ -26,7 +26,7 @@ namespace esphome::lvgl_screenshot {
 
 /// One JPEG screenshot. It points into the component's own output buffer (no copy): the next
 /// screenshot is only made once every API connection has released this one.
-class ScreenshotImage : public camera::CameraImage {
+class ScreenshotImage final : public camera::CameraImage {
  public:
   ScreenshotImage(uint8_t *data, size_t length, uint8_t requesters)
       : data_(data), length_(length), requesters_(requesters) {}
@@ -42,7 +42,7 @@ class ScreenshotImage : public camera::CameraImage {
   uint8_t requesters_;
 };
 
-class ScreenshotImageReader : public camera::CameraImageReader {
+class ScreenshotImageReader final : public camera::CameraImageReader {
  public:
   void set_image(std::shared_ptr<camera::CameraImage> image) override {
     this->image_ = std::move(image);
@@ -60,7 +60,7 @@ class ScreenshotImageReader : public camera::CameraImageReader {
 
 #ifdef USE_LVGL_SCREENSHOT_SW_JPEG
 /// The raw RGB565 picture, handed to a camera::Encoder.
-class RawPixels : public camera::Buffer {
+class RawPixels final : public camera::Buffer {
  public:
   RawPixels(uint8_t *data, size_t length) : data_(data), length_(length) {}
   uint8_t *get_data_buffer() override { return this->data_; }
@@ -72,9 +72,10 @@ class RawPixels : public camera::Buffer {
 };
 #endif
 
-class LvglScreenshot : public camera::Camera {
+class LvglScreenshot final : public camera::Camera {
  public:
-  void setup() override;
+  // Buffers, the encoder and the software encoding task are created on the first request, so a
+  // display nobody looks at costs no memory; there is nothing to set up.
   void loop() override;
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::LATE; }

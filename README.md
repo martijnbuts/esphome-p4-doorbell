@@ -95,16 +95,17 @@ JPEG decoder and the PPA share the DMA2D controller, which can hang under load
 
 ## Requirements
 
-ESP32-P4 with PSRAM, ESPHome 2026.11.0 or newer (beta 2026.11.0b3 or dev; ESP-IDF 5.5, 6.0 or 6.1;
-LVGL 9.6), Home Assistant with the go2rtc add-on for the MJPEG stream and the audio.
-For LVGL drawing with the PPA you need ESP-IDF 6.0 or newer; see
+ESP32-P4 with PSRAM, ESPHome 2026.11.0 or newer (ESP-IDF 5.5, 6.0 or 6.1; LVGL 9.6), Home
+Assistant with the go2rtc add-on for the MJPEG stream and the audio.
+For LVGL drawing with the PPA you need ESP-IDF 6.0 or newer: the default of ESPHome dev since
+19 November 2026 (ESP-IDF 6.1.1); on ESPHome 2026.11 add `version: 6.1.1`. See
 [Hardware acceleration at a glance](docs/PERFORMANCE.md#hardware-acceleration-at-a-glance).
 
-Checked on 10 November 2026: the example configuration validates with ESPHome 2026.12.0-dev and
-2026.11.0b3, both with the default ESP-IDF (5.5.6) and with ESP-IDF 6.1.0 and `LV_USE_PPA_IMG`.
+Checked on 21 November 2026: the author's display runs the components with ESPHome
+2026.12.0-dev (21 November) and its default ESP-IDF 6.1.1, next to Home Assistant 2026.11.1 and
+go2rtc 1.9.15; the ESP32-S3 display configuration also builds with it. On 10 November the
+example configuration validated with ESPHome 2026.11.0b3 and the then default ESP-IDF 5.5.6.
 ESPHome 2026.10.2 (stable, LVGL 9.5) still needs `active_high: true` under `esp32_hosted:`.
-The author's display runs the components with ESPHome 2026.11.0-dev and ESP-IDF 6.1.0, next to
-Home Assistant 2026.11.1 and go2rtc 1.9.15.
 
 ## Credits
 

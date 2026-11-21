@@ -41,16 +41,18 @@ void JpegStream::setup() {
 }
 
 void JpegStream::dump_config() {
-  ESP_LOGCONFIG(TAG,
-                "JPEG stream:\n"
-                "  Max size: %ux%u\n"
-                "  Max JPEG size: %" PRIu32 " bytes\n"
-                "  Timeout: %" PRIu32 " ms\n"
-                "  Min interval: %" PRIu32 " ms\n"
-                "  Stats interval: %" PRIu32 " ms\n"
-                "  Decoder: %s",
-                this->max_width_, this->max_height_, this->max_jpeg_size_, this->timeout_, this->min_interval_,
-                this->stats_interval_, this->hardware_decoder_ ? "hardware (ESP32-P4)" : "software (JPEGDEC)");
+  ESP_LOGCONFIG(
+      TAG,
+      "JPEG stream:\n"
+      "  Max size: %ux%u\n"
+      "  Max JPEG size: %" PRIu32 " bytes\n"
+      "  Timeout: %" PRIu32 " ms\n"
+      "  Min interval: %" PRIu32 " ms\n"
+      "  Stats interval: %" PRIu32 " ms\n"
+      "  Decoder: %s",
+      this->max_width_, this->max_height_, this->max_jpeg_size_, this->timeout_, this->min_interval_,
+      this->stats_interval_,
+      this->hardware_decoder_ ? LOG_STR_LITERAL("hardware (ESP32-P4)") : LOG_STR_LITERAL("software (JPEGDEC)"));
 }
 
 void JpegStream::set_url(const std::string &url) {
@@ -187,7 +189,7 @@ void JpegStream::loop() {
     if (this->stats_shown_ > 0)
       this->gap_us_max_ = std::max(this->gap_us_max_, now_us - this->last_shown_us_);
     this->last_shown_us_ = now_us;
-    this->last_shown_ms_ = millis();
+    this->last_shown_ms_ = App.get_loop_component_start_time();
     if (this->first_frame_pending_) {
       // Startup time: connection, the source's first (key)frame, receive and decode
       this->first_frame_pending_ = false;
@@ -213,7 +215,8 @@ void JpegStream::loop() {
     this->error_callback_.call();
   }
 
-  if (this->stats_interval_ > 0 && this->running_ && millis() - this->stats_start_ >= this->stats_interval_)
+  if (this->stats_interval_ > 0 && this->running_ &&
+      App.get_loop_component_start_time() - this->stats_start_ >= this->stats_interval_)
     this->log_stats_();
 
   if (!this->running_ && this->ready_ < 0)
@@ -259,7 +262,7 @@ void JpegStream::reset_stats_() {
     LockGuard guard(this->stats_mutex_);
     this->task_stats_ = TaskStats{};
   }
-  this->stats_start_ = millis();
+  this->stats_start_ = App.get_loop_component_start_time();
   this->stats_dropped_start_ = this->dropped_count_;
   this->stats_shown_ = this->stats_errors_ = 0;
   this->handoff_us_ = this->handoff_us_max_ = this->gap_us_max_ = 0;
@@ -272,7 +275,7 @@ void JpegStream::log_stats_() {
     LockGuard guard(this->stats_mutex_);
     task = this->task_stats_;
   }
-  const uint32_t now = millis();
+  const uint32_t now = App.get_loop_component_start_time();
   const uint32_t dropped = this->dropped_count_;
   if (now > this->stats_start_) {
     const float seconds = (now - this->stats_start_) / 1000.0f;

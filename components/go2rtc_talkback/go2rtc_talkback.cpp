@@ -11,12 +11,13 @@
 #include <lwip/sockets.h>
 
 #include "esphome/components/network/util.h"
+#include "esphome/core/application.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
 namespace esphome::go2rtc_talkback {
 
-static const char *const TAG = "go2rtc_talkback";
+ESPHOME_LOG_TAG(TAG, "go2rtc_talkback");
 
 static constexpr const char *PATH = "/talk.wav";
 static constexpr size_t RING_BUFFER_SIZE = 32768;  // 1 s at 16 kHz, 16-bit mono
@@ -29,8 +30,7 @@ static constexpr int HTTP_TIMEOUT_MS = 15000;    // go2rtc answers once ffmpeg h
 void Go2rtcTalkback::setup() {
   this->ring_buffer_ = ring_buffer::RingBuffer::create(RING_BUFFER_SIZE);
   if (this->ring_buffer_ == nullptr) {
-    ESP_LOGE(TAG, "Could not allocate the ring buffer");
-    this->mark_failed();
+    this->mark_failed(LOG_STR("Could not allocate the ring buffer"));
     return;
   }
   this->sample_rate_ = this->mic_source_->get_audio_stream_info().get_sample_rate();
@@ -49,8 +49,7 @@ void Go2rtcTalkback::setup() {
                   &this->server_task_handle_) != pdPASS ||
       xTaskCreate(Go2rtcTalkback::control_task_, "talkback_api", CONTROL_STACK, this, TASK_PRIORITY,
                   &this->control_task_handle_) != pdPASS) {
-    ESP_LOGE(TAG, "Could not create the tasks");
-    this->mark_failed();
+    this->mark_failed(LOG_STR("Could not create the tasks"));
   }
 }
 
@@ -60,8 +59,9 @@ void Go2rtcTalkback::dump_config() {
                 "  go2rtc: %s, stream: %s%s\n"
                 "  Microphone: http://<this device>:%u%s (%" PRIu32 " Hz, 16-bit mono WAV)\n"
                 "  Max duration: %" PRIu32 " ms",
-                this->url_.c_str(), this->stream_.c_str(), this->username_.empty() ? "" : " (with password)",
-                this->port_, PATH, this->sample_rate_, this->max_duration_);
+                this->url_.c_str(), this->stream_.c_str(),
+                this->username_.empty() ? LOG_STR_LITERAL("") : LOG_STR_LITERAL(" (with password)"), this->port_, PATH,
+                this->sample_rate_, this->max_duration_);
   for (uint32_t addr : this->allowed_ips_) {
     ESP_LOGCONFIG(TAG, "  Allowed: %u.%u.%u.%u", (unsigned) (addr & 0xFF), (unsigned) ((addr >> 8) & 0xFF),
                   (unsigned) ((addr >> 16) & 0xFF), (unsigned) (addr >> 24));
@@ -137,7 +137,8 @@ void Go2rtcTalkback::loop() {
     return;
   }
 
-  if (this->active_.load() && this->max_duration_ != 0 && millis() - this->start_ms_ > this->max_duration_) {
+  if (this->active_.load() && this->max_duration_ != 0 &&
+      App.get_loop_component_start_time() - this->start_ms_ > this->max_duration_) {
     ESP_LOGI(TAG, "Maximum duration reached");
     this->stop();
   }
@@ -196,7 +197,7 @@ void Go2rtcTalkback::serve_() {
       ESP_LOGW(TAG, "Refused %u.%u.%u.%u: not in allowed_ips", (unsigned) (peer_ip & 0xFF),
                (unsigned) ((peer_ip >> 8) & 0xFF), (unsigned) ((peer_ip >> 16) & 0xFF), (unsigned) (peer_ip >> 24));
     } else if (!this->active_.load()) {
-      static const char NOT_TALKING[] = "HTTP/1.0 503 Service Unavailable\r\nConnection: close\r\n\r\n";
+      static constexpr char NOT_TALKING[] = "HTTP/1.0 503 Service Unavailable\r\nConnection: close\r\n\r\n";
       ::send(fd, NOT_TALKING, sizeof(NOT_TALKING) - 1, 0);
     } else {
       this->serve_client_(fd);
@@ -245,13 +246,13 @@ void Go2rtcTalkback::serve_client_(int fd) {
   const size_t path_len = strlen(PATH);
   if (strncmp(req, "GET ", 4) != 0 || strncmp(req + 4, PATH, path_len) != 0 ||
       (req[4 + path_len] != ' ' && req[4 + path_len] != '?')) {
-    static const char NOT_FOUND[] = "HTTP/1.0 404 Not Found\r\nConnection: close\r\n\r\n";
+    static constexpr char NOT_FOUND[] = "HTTP/1.0 404 Not Found\r\nConnection: close\r\n\r\n";
     ::send(fd, NOT_FOUND, sizeof(NOT_FOUND) - 1, 0);
     return;
   }
 
   // HTTP/1.0 without Content-Length: the body ends when the connection closes (on stop)
-  static const char HEAD[] =
+  static constexpr char HEAD[] =
       "HTTP/1.0 200 OK\r\nContent-Type: audio/wav\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
   // WAV header for 16-bit mono PCM with an unknown (maximum) length
   uint8_t wav[44];
@@ -294,7 +295,7 @@ void Go2rtcTalkback::serve_client_(int fd) {
 void Go2rtcTalkback::control_task_(void *arg) { static_cast<Go2rtcTalkback *>(arg)->control_(); }
 
 static std::string url_encode(const std::string &in) {
-  static const char HEX_DIGITS[] = "0123456789ABCDEF";
+  static constexpr char HEX_DIGITS[] = "0123456789ABCDEF";
   std::string out;
   out.reserve(in.size() * 3);
   for (unsigned char c : in) {

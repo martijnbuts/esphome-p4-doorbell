@@ -31,7 +31,7 @@ does what, and when it is on (checked against ESPHome dev, LVGL 9.6.0 and ESP-ID
 
 What this means in practice:
 
-- **With ESPHome's default ESP-IDF (5.5.6)** only the JPEG codec and, with a rotation, the PPA
+- **With ESP-IDF 5.5 (the default of ESPHome 2026.11)** only the JPEG codec and, with a rotation, the PPA
   rotation are used; LVGL draws everything else in software. That is enough for the 10 fps of the
   camera.
 - **The biggest gain is not hardware but leaving work out**: no `rotation` (13 ms per frame) and
@@ -151,8 +151,8 @@ ESP-IDF 5.5, where the PPA stays off); ESPHome 2026.10 still uses LVGL 9.5.
 
 #### ESP-IDF 6.1
 
-The author's display runs ESP-IDF 6.1.0 since 14 October 2026, with the same settings
-(`LV_USE_PPA_IMG`, no rotation); the frame rate has not been measured again. Two changes in
+The author's display ran ESP-IDF 6.1.0 from 14 October 2026 and runs 6.1.1 since 20 November 2026,
+with the same settings (`LV_USE_PPA_IMG`, no rotation); the frame rate has not been measured again. Two changes in
 ESP-IDF 6.1 matter for this board
 ([release notes](https://github.com/espressif/esp-idf/releases/tag/v6.1)):
 
@@ -164,7 +164,10 @@ ESP-IDF 6.1 matter for this board
   ffmpeg output; a frame that is refused counts as an error in the statistics.
 
 Without a `version`, ESPHome uses its recommended ESP-IDF: 5.5.6 since 17 October 2026
-([esphome#20987](https://github.com/esphome/esphome/pull/20987)).
+([esphome#20987](https://github.com/esphome/esphome/pull/20987)), and on dev 6.1.1 since
+19 November 2026 ([esphome#22902](https://github.com/esphome/esphome/pull/22902)). ESP-IDF 6.1.1
+fixes two ESP32-P4 boot problems (PSRAM XIP on chip revision v3.x, stale flash data in the L1 cache)
+and has nothing on the JPEG codec, the PPA or the DMA2D issue below.
 
 ### Start-up time
 

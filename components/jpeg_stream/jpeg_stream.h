@@ -28,7 +28,7 @@ namespace esphome::jpeg_stream {
 /// Receives JPEG frames from an URL in a background task (an MJPEG stream, or a single image that is
 /// fetched again and again), decodes them in that task (ESP32-P4 hardware JPEG decoder, or JPEGDEC in
 /// software) and shows each frame on an LVGL canvas. The main loop only swaps the canvas buffer.
-class JpegStream : public Component {
+class JpegStream final : public Component {
  public:
   JpegStream(uint16_t max_width, uint16_t max_height, uint32_t max_jpeg_size)
       : max_width_(max_width), max_height_(max_height), max_jpeg_size_(max_jpeg_size) {}

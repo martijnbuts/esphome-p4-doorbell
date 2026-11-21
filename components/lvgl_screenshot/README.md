@@ -98,9 +98,11 @@ block), ESP32-P4 (hardware) and ESP32-P4 with an explicit software `encoder`; se
 
 ## Tested on
 
-- Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024×600, MIPI DSI), ESP-IDF 6.1, LVGL 9.6
-- ESP32-S3 (N16R8) with an 800×480 RGB panel, ESP-IDF 5.5, LVGL 9.6
-- ESPHome 2026.12.0-dev (14 November 2026); compiles and validates for both chips
+- Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024×600, MIPI DSI), ESP-IDF 6.1.1, LVGL 9.6
+  (21 November 2026: render 74 ms, JPEG 12 ms, 111 kB)
+- ESP32-S3 (N16R8) with an 800×480 RGB panel, ESP-IDF 5.5, LVGL 9.6; also builds with
+  ESP-IDF 6.1.1 (not yet run on the device)
+- ESPHome 2026.12.0-dev (21 November 2026); compiles for both chips
 
 ## Limitations
 
@@ -133,13 +135,24 @@ captures LVGL during a normal refresh (or the P4 MIPI DSI framebuffer), encodes 
 serves the JPEG over HTTP. This component instead renders on request and uses ESPHome's camera
 entity, so the picture goes over the native API without the web server.
 
+In ESPHome itself (checked 21 November 2026):
+
+- [esphome#19421](https://github.com/esphome/esphome/pull/19421) (merged, 2026.10) added the
+  `snapshot` component: `snapshot.take` writes what a display shows to a BMP or animated GIF
+  file. It only runs on the `host` platform, but its `Snapshot` base class (a display that can
+  hand over its pixels) is a model a screenshot camera could use.
+- [esphome#22789](https://github.com/esphome/esphome/pull/22789) (open) lets other components
+  read back the finished picture of a `mipi_dsi` panel, including video drawn outside LVGL. On
+  the P4 that would replace the second render with a copy of the frame buffer.
+
 Open questions for the maintainers:
 
 - **How to avoid the long render in the main loop?** `lv_snapshot` renders the whole screen in
   one call. Options I see: render a few rows per loop with a clipped area, capture the pixels
   during LVGL's normal refresh (the flush callback sees every rendered area; this saves the
   second render but needs a full refresh and only works when the display driver gets all
-  pixels), or accept it for an on-demand diagnostic feature.
+  pixels), read the display's frame buffer back where the driver allows it (esphome#22789 for
+  `mipi_dsi`), or accept it for an on-demand diagnostic feature.
 - Should the screenshot camera be its own component, or part of `lvgl` (for example a
   `camera` option on the `lvgl:` block)?
 - Should the top and system layers be included in the picture?

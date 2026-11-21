@@ -19,7 +19,7 @@
 namespace esphome::go2rtc_talkback {
 
 /// The microphone as an endless WAV over HTTP, played by go2rtc on a camera's two-way audio channel.
-class Go2rtcTalkback : public Component {
+class Go2rtcTalkback final : public Component {
  public:
   void setup() override;
   void loop() override;

@@ -103,6 +103,10 @@ The P4 numbers are from the more detailed measurements in [docs/PERFORMANCE.md](
 (12 October 2026; synthetic 30 and 60 fps sources, start-up time, CPU per task); the first-frame
 time (119 ms, and 59 ms in a second run) was measured on 14 November 2026 with this version.
 
+The first-frame time depends on go2rtc: those numbers are with the MJPEG stream kept running by
+go2rtc's `preload`. When go2rtc first has to start ffmpeg and wait for a key frame, the first
+frame takes 6.5–8.5 s (measured on 21 November 2026, when the preload had stopped).
+
 ## Tests
 
 [`tests/components/jpeg_stream`](../../tests/components/jpeg_stream) has test configurations in
@@ -112,11 +116,11 @@ the layout of ESPHome's own tests: ESP32-S3 (software), ESP32-P4 (hardware) and 
 
 ## Tested on
 
-- ESP32-P4 (Waveshare ESP32-P4-WIFI6-Touch-LCD-7B), ESP-IDF 6.1, LVGL 9.6: `hardware`, in daily
-  use since October 2026
+- ESP32-P4 (Waveshare ESP32-P4-WIFI6-Touch-LCD-7B), ESP-IDF 6.1.1, LVGL 9.6: `hardware`, in daily
+  use since October 2026 (21 November 2026: decode 3.6 ms, 0 errors)
 - ESP32-S3 (N16R8, octal PSRAM) with an 800×480 RGB panel, ESP-IDF 5.5, LVGL 9.6: `software`,
   live doorbell stream on 14 November 2026
-- ESPHome 2026.12.0-dev (14 November 2026)
+- ESPHome 2026.12.0-dev (21 November 2026); the S3 build also compiles with ESP-IDF 6.1.1
 
 ## Limitations
 
@@ -140,18 +144,30 @@ upstream better as pieces of what exists than as a new component:
 
 1. **runtime_image: use the ESP32-P4 hardware JPEG decoder automatically**, with JPEGDEC as the
    fallback (for example for progressive JPEGs). That matches the review comments on
-   [esphome#16902](https://github.com/esphome/esphome/pull/16902): no extra YAML, at most an
-   option to turn it off.
+   [esphome#16902](https://github.com/esphome/esphome/pull/16902) (a P4 JPEG helper, closed
+   without merging in September 2026): no extra YAML, at most an option to turn it off.
 2. **online_image: MJPEG streams.** A `multipart/x-mixed-replace` source with continuous updates,
    received and decoded in a background task, double-buffered so LVGL shows complete frames
    (runtime_image already has `double_buffer`).
 3. Optionally, **skip frames instead of queueing**, and the `stats_interval` diagnostics.
+
+Two open pull requests (checked 21 November 2026) cover nearby ground, and the pieces above
+could build on them:
+
+- [esphome#22767](https://github.com/esphome/esphome/pull/22767) `camera_decoder`: a
+  `camera::Decoder` interface next to `camera::Encoder`, with a software JPEG decoder. A P4
+  hardware decoder would fit there as a second type.
+- [esphome#22766](https://github.com/esphome/esphome/pull/22766) `camera_image`: shows frames of
+  an `esp32_camera` as an `image` (JPEGDEC, `double_buffer`, resize, crop, rotation). It fetches
+  a frame per `update_interval`; an HTTP/MJPEG source as a camera platform could feed it.
 
 Open questions for the maintainers:
 
 - On chips without a 2D accelerator, LVGL drawing the frame costs more than decoding it (S3:
   109–133 ms against 70–104 ms). Should a stream write straight into the display's frame buffer when
   the picture is not covered by other widgets, or is drawing through LVGL the expected way?
+- Should an MJPEG stream be an `online_image` source, or a camera platform shown through
+  `camera_image` (esphome#22766)?
 - Is a background task acceptable for `online_image`, or should streaming stay in the main loop
   with a time budget per loop (like the current decoding)?
 - Should the stream use `http_request`, which would need a streaming/long-running mode, or is a

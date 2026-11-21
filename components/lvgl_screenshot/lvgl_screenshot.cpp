@@ -4,12 +4,13 @@
 
 #include <esp_heap_caps.h>
 
+#include "esphome/core/application.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
 namespace esphome::lvgl_screenshot {
 
-static const char *const TAG = "lvgl_screenshot";
+ESPHOME_LOG_TAG(TAG, "lvgl_screenshot");
 
 #ifdef USE_LVGL_SCREENSHOT_HW_JPEG
 // Far longer than the hardware needs for 1024x600 (a few ms). This only bounds the encode itself:
@@ -24,17 +25,6 @@ static constexpr uint32_t TASK_STACK_SIZE = 6144;
 // Encoding attempts per screenshot; each failed one grows the encoder's output buffer by half.
 static constexpr int MAX_ENCODE_ATTEMPTS = 6;
 #endif
-
-void LvglScreenshot::setup() {
-  // Buffers, the hardware encoder and the software encoding task are all created on the first
-  // request, so a display nobody looks at costs no memory.
-#ifdef USE_LVGL_SCREENSHOT_SW_JPEG
-  if (this->encoder_ == nullptr) {
-    ESP_LOGE(TAG, "No JPEG encoder");
-    this->mark_failed();
-  }
-#endif
-}
 
 void LvglScreenshot::dump_config() {
   ESP_LOGCONFIG(TAG,
@@ -53,8 +43,7 @@ void LvglScreenshot::dump_config() {
                 "  Task priority: %u",
                 this->task_priority_);
   // camera_encoder is not a Component, so nobody else logs its settings
-  if (this->encoder_ != nullptr)
-    this->encoder_->dump_config();
+  this->encoder_->dump_config();
 #endif
 }
 
@@ -83,13 +72,14 @@ void LvglScreenshot::loop() {
     this->publish_(out->get_data(), out->get_size(), this->sw_requesters_, this->sw_render_ms_, this->sw_encode_ms_);
     this->sw_state_.store(SW_IDLE, std::memory_order_release);
   } else if (state == SW_FAILED) {
-    ESP_LOGE(TAG, "JPEG encoding failed: %s", this->sw_error_ != nullptr ? this->sw_error_ : "unknown");
+    ESP_LOGE(TAG, "JPEG encoding failed: %s",
+             this->sw_error_ != nullptr ? this->sw_error_ : LOG_STR_LITERAL("unknown"));
     this->sw_state_.store(SW_IDLE, std::memory_order_release);
   }
 #endif
 
   uint8_t requesters = this->single_requesters_;
-  const uint32_t now = millis();
+  const uint32_t now = App.get_loop_component_start_time();
   const bool stream_due = this->stream_requesters_ != 0 && now - this->last_stream_frame_ >= this->stream_interval_;
   if (stream_due)
     requesters |= this->stream_requesters_;
