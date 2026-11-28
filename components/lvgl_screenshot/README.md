@@ -94,21 +94,20 @@ previous one.
 
 ## Measured
 
-ESP32-P4, 1024×600 dashboard (Waveshare 7B), ESP-IDF 6.1.1:
+ESPHome 2026.12.0-dev, ESP-IDF 6.1.1, the dashboards shown on these displays:
 
-| | Software encoder (default) | Hardware encoder (`type: hardware`) |
-| --- | --- | --- |
-| Render (`lv_snapshot`, main loop) | 48–49 ms | 48–52 ms |
-| Encode (own task, including the byte swap) | 341–348 ms | 85–103 ms |
-| JPEG size | 82 kB (quality 80) | 109 kB (quality 85, 4:4:4) |
+| | ESP32-P4 1024×600, software encoder (default) | ESP32-P4 1024×600, hardware encoder (`type: hardware`) | ESP32-S3 800×480, software encoder |
+| --- | --- | --- | --- |
+| Render (`lv_snapshot`, main loop) | 48–49 ms | 48–52 ms | 127–128 ms |
+| Encode (own task, including the byte swap) | 341–348 ms | 85–103 ms | 407–419 ms |
+| JPEG size | 82 kB (quality 80) | 109 kB (quality 85, 4:4:4) | 67 kB (quality 85) |
 
 Measured on 27 and 28 November 2026. The times are in the log at VERBOSE:
 `Screenshot 1024x600, 82072 bytes (render 48 ms, encode 348 ms)`.
 
 The render step is the weak point. ESPHome warns when a component holds up the main loop for more
-than 50 ms; on the P4 that happened only for the first screenshot after boot (71 ms). Slower chips
-take longer: the ESP32-S3 with an 800×480 panel needed 125 ms with the previous version of this
-component.
+than 50 ms; on the P4 that happened only for the first screenshot after boot (71 ms), on the S3 the
+render takes 127 ms. Free internal RAM on the S3 stayed at 163 kB while screenshots were made.
 
 The previous version (until 27 November 2026) encoded on the P4 in the main loop and held it up
 for 177 ms per screenshot.
@@ -124,7 +123,8 @@ encoder, and the ESP32-P4 with the hardware encoder; see [`tests/README.md`](../
 - Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024×600, MIPI DSI), ESP-IDF 6.1.1, LVGL 9.6,
   ESPHome 2026.12.0-dev: both encoders (27 and 28 November 2026), also while `jpeg_stream`
   decodes a doorbell stream with the same JPEG codec
-- ESP32-S3 (N16R8) with an 800×480 RGB panel, LVGL 9.6, with the software encoder
+- ESP32-S3 (N16R8) with an 800×480 RGB panel, ESP-IDF 6.1.1, LVGL 9.6, ESPHome 2026.12.0-dev: software
+  encoder (28 November 2026)
 
 ## Limitations
 
