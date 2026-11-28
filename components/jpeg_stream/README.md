@@ -117,11 +117,13 @@ the layout of ESPHome's own tests: ESP32-S3 (software), ESP32-P4 (hardware) and 
 
 ## Tested on
 
-- ESP32-P4 (Waveshare ESP32-P4-WIFI6-Touch-LCD-7B), ESP-IDF 6.1.1, LVGL 9.6: `hardware`, in daily
-  use since October 2026 (21 November 2026: decode 3.6 ms, 0 errors)
-- ESP32-S3 (N16R8, octal PSRAM) with an 800×480 RGB panel, ESP-IDF 5.5, LVGL 9.6: `software`,
-  live doorbell stream on 14 November 2026
-- ESPHome 2026.12.0-dev (21 November 2026); the S3 build also compiles with ESP-IDF 6.1.1
+- ESP32-P4 (Waveshare ESP32-P4-WIFI6-Touch-LCD-7B), ESPHome 2026.12.0-dev, ESP-IDF 6.1.1, LVGL 9.6:
+  `hardware`, in daily use since October 2026. 27 November 2026: decode 3.5 ms, 254 frames in 30 s,
+  0 errors, while `lvgl_screenshot` used the same JPEG codec. 28 November 2026: this version
+  (buffers made in `setup()`) starts the stream and runs without errors.
+- ESP32-S3 (N16R8, octal PSRAM) with an 800×480 RGB panel, LVGL 9.6: `software`, live doorbell
+  stream on 14 November 2026 with ESP-IDF 5.5 and the version before the `setup()` change; not yet
+  run with ESP-IDF 6.1.1
 
 ## Limitations
 

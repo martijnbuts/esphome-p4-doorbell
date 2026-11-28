@@ -86,8 +86,8 @@ The limit is the LVGL refresh of the 640×480 canvas, not the network or the dec
 
 | Display firmware | LVGL refresh per frame | Synthetic source shown |
 | --- | --- | --- |
-| LVGL `rotation: 180`, ESP-IDF 5.5 | ~41 ms | 30 fps in → 21.5 fps |
-| No rotation, ESP-IDF 6.0, LVGL draws the picture with the PPA | ~21 ms | 30 fps in → 29.9 fps; 60 fps in → 38.8 fps |
+| LVGL `rotation: 180`, ESP-IDF 5.5 (October 2026) | ~41 ms | 30 fps in → 21.5 fps |
+| No rotation, ESP-IDF 6, LVGL draws the picture with the PPA (as now) | ~21 ms | 30 fps in → 29.9 fps; 60 fps in → 38.8 fps |
 
 With a go2rtc `preload` the first frame is on the screen 0.13 s after the page opens (7.7 s
 without). Details, how to measure and ideas to make it faster:
@@ -100,17 +100,18 @@ JPEG decoder and the PPA share the DMA2D controller, which can hang under load
 
 ## Requirements
 
-ESP32-P4 with PSRAM, ESPHome 2026.11.0 or newer (ESP-IDF 5.5, 6.0 or 6.1; LVGL 9.6), Home
-Assistant with the go2rtc add-on for the MJPEG stream and the audio.
-For LVGL drawing with the PPA you need ESP-IDF 6.0 or newer: the default of ESPHome dev since
-19 November 2026 (ESP-IDF 6.1.1); on ESPHome 2026.11 add `version: 6.1.1`. See
+ESP32-P4 with PSRAM, ESPHome dev with its default ESP-IDF 6.1.1 (LVGL 9.6), Home Assistant with
+the go2rtc add-on for the MJPEG stream and the audio. With ESP-IDF 6 LVGL draws with the PPA; see
 [Hardware acceleration at a glance](docs/PERFORMANCE.md#hardware-acceleration-at-a-glance).
+Older ESPHome releases are not tested with the current code.
 
-Checked on 21 November 2026: the author's display runs the components with ESPHome
-2026.12.0-dev (21 November) and its default ESP-IDF 6.1.1, next to Home Assistant 2026.11.1 and
-go2rtc 1.9.15; the ESP32-S3 display configuration also builds with it. On 10 November the
-example configuration validated with ESPHome 2026.11.0b3 and the then default ESP-IDF 5.5.6.
-ESPHome 2026.10.2 (stable, LVGL 9.5) still needs `active_high: true` under `esp32_hosted:`.
+Checked on 28 November 2026 with ESPHome 2026.12.0-dev and ESP-IDF 6.1.1, Home Assistant 2026.11.1
+and go2rtc 1.9.15:
+
+- the author's ESP32-P4 display runs `jpeg_stream` (doorbell stream), `lvgl_screenshot` with the
+  hardware `camera_encoder`, and `go2rtc_talkback`;
+- the author's ESP32-S3 display runs `lvgl_screenshot` with the software encoder;
+- the example configuration and all test configurations validate.
 
 ## Credits
 

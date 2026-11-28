@@ -31,9 +31,10 @@ does what, and when it is on (checked against ESPHome dev, LVGL 9.6.0 and ESP-ID
 
 What this means in practice:
 
-- **With ESP-IDF 5.5 (the default of ESPHome 2026.11)** only the JPEG codec and, with a rotation, the PPA
-  rotation are used; LVGL draws everything else in software. That is enough for the 10 fps of the
-  camera.
+- **With ESPHome dev (ESP-IDF 6.1.1 by default)** LVGL draws fills with the PPA, and with
+  `-DLV_USE_PPA_IMG=1` also the doorbell picture. Before ESP-IDF 6 (ESPHome 2026.11 used 5.5) only
+  the JPEG codec and, with a rotation, the PPA rotation were used, which was already enough for the
+  10 fps of the camera.
 - **The biggest gain is not hardware but leaving work out**: no `rotation` (13 ms per frame) and
   no `clip_corner` on the card around the picture (10 ms). `LV_USE_PPA_IMG` then saves another 8 ms.
 - **The JPEG codec is one engine.** The ESP-IDF driver takes a lock for each decode or encode, so
@@ -100,12 +101,10 @@ default. ESPHome keeps a `-D` build flag that sets an LVGL option:
 esphome:
   build_flags:
     - -DLV_USE_PPA_IMG=1   # LVGL draws simple images (unscaled, unrotated, opaque) with the PPA
-
-esp32:
-  framework:
-    type: esp-idf
-    version: 6.0.1
 ```
+
+ESPHome dev builds with ESP-IDF 6.1.1 by default, so no `version` is needed. The measurements below
+were made with ESP-IDF 6.0.1, set with `esp32: framework: version: 6.0.1`.
 
 Same display, no rotation, camera at 10 fps, two 30-second windows each:
 
@@ -146,8 +145,7 @@ With LVGL 9.6 the compiler warns that `lv_obj_add_flag()`, `lv_obj_remove_flag()
 `lv_obj_has_flag()` are deprecated (`lv_obj_set_hidden()` and so on). Since 19 October 2026 the
 doorbell package no longer calls them: it shows and hides the picture with ESPHome's own
 `lvgl.widget.show` and `lvgl.widget.hide`, which use the right call for the LVGL version ESPHome
-builds with. ESPHome dev builds every configuration with LVGL 9.6 since 12 October 2026 (also with
-ESP-IDF 5.5, where the PPA stays off); ESPHome 2026.10 still uses LVGL 9.5.
+builds with. ESPHome dev builds every configuration with LVGL 9.6.
 
 #### ESP-IDF 6.1
 
@@ -163,9 +161,8 @@ ESP-IDF 6.1 matter for this board
 - The JPEG decoder checks images more strictly against malformed input. go2rtc's MJPEG is normal
   ffmpeg output; a frame that is refused counts as an error in the statistics.
 
-Without a `version`, ESPHome uses its recommended ESP-IDF: 5.5.6 since 17 October 2026
-([esphome#20987](https://github.com/esphome/esphome/pull/20987)), and on dev 6.1.1 since
-19 November 2026 ([esphome#22902](https://github.com/esphome/esphome/pull/22902)). ESP-IDF 6.1.1
+Without a `version`, ESPHome dev uses ESP-IDF 6.1.1 since 19 November 2026
+([esphome#22902](https://github.com/esphome/esphome/pull/22902)). ESP-IDF 6.1.1
 fixes two ESP32-P4 boot problems (PSRAM XIP on chip revision v3.x, stale flash data in the L1 cache)
 and has nothing on the JPEG codec, the PPA or the DMA2D issue below.
 

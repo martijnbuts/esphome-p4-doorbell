@@ -1,6 +1,6 @@
 # Live Reolink doorbell video and audio on an ESP32-P4 display
 
-11 October 2026, updated 10 November 2026 · Martijn Buts
+11 October 2026, updated 28 November 2026 · Martijn Buts
 
 ## What you build
 
@@ -10,7 +10,7 @@ When someone rings the doorbell, an ESP32-P4 display opens a page with the live 
 
 The display opens one MJPEG connection to go2rtc; Home Assistant sends the ring and plays the audio.
 
-Written for: a Reolink D340P (any Reolink with an RTSP sub-stream in Home Assistant works), a Waveshare display with an ESP32-P4 and PSRAM (1024×600, LVGL), Home Assistant OS 2026.10.1 with the go2rtc add-on 1.9.14 (now running on 2026.11.1 and 1.9.15), ESPHome 2026.11.0-dev (versions checked again on 10 November 2026) and a MikroTik router as the firewall example. All code is in the repository [martijnbuts/esphome-p4-doorbell](https://github.com/martijnbuts/esphome-p4-doorbell).
+Written for: a Reolink D340P (any Reolink with an RTSP sub-stream in Home Assistant works), a Waveshare display with an ESP32-P4 and PSRAM (1024×600, LVGL), Home Assistant OS 2026.11.1 with the go2rtc add-on 1.9.15, ESPHome dev (2026.12.0-dev) with its default ESP-IDF 6.1.1 (versions checked on 28 November 2026) and a MikroTik router as the firewall example. All code is in the repository [martijnbuts/esphome-p4-doorbell](https://github.com/martijnbuts/esphome-p4-doorbell).
 
 ## What you need
 
@@ -19,10 +19,10 @@ You need a Reolink camera in Home Assistant, the go2rtc add-on and an ESP32-P4 d
 | Part | Requirement | Why |
 | --- | --- | --- |
 | Reolink doorbell or camera | Added with the Reolink integration; a sub-stream of 640×480 | Home Assistant's built-in go2rtc serves its RTSP stream on 127.0.0.1:18554 |
-| Home Assistant | HA OS or Supervised (add-ons); tested on 2026.10.1, runs on 2026.11.1 | Runs the go2rtc add-on and converts the audio for the display |
-| go2rtc add-on | From the AlexxIT add-on repository; tested on 1.9.14, runs on 1.9.15 | Turns the RTSP stream into MJPEG and AAC, behind a password |
+| Home Assistant | HA OS or Supervised (add-ons); runs on 2026.11.1 | Runs the go2rtc add-on and converts the audio for the display |
+| go2rtc add-on | From the AlexxIT add-on repository; runs on 1.9.15 | Turns the RTSP stream into MJPEG and AAC, behind a password |
 | ESP32-P4 board with display | PSRAM (the frame buffers take about 1.5 MB), Wi-Fi, LVGL; the board in ESPHome must match the chip revision (below v3.0: esp32-p4-evboard, v3.0 and newer: esp32-p4\_r3-evboard) | The P4 has a hardware JPEG decoder: 5–10 ms per frame |
-| ESPHome | 2026.11.0 or newer (now beta 2026.11.0b3 or dev) with ESP-IDF 5.5, 6.0 or 6.1 (all three tested) | The components use the LVGL 9 canvas and the ESP-IDF JPEG driver; LVGL only draws with the PPA from ESP-IDF 6.0 |
+| ESPHome | dev, with its default ESP-IDF 6.1.1; older releases are not tested with the current code | The components use the LVGL 9.6 canvas and the ESP-IDF JPEG driver; with ESP-IDF 6 LVGL draws with the PPA |
 | Media player on the display | An ESPHome `speaker` media player with an announcement pipeline | The doorbell audio plays as an announcement and pauses music |
 | Router | Firewall rules between VLANs (the example is MikroTik RouterOS 7) | The display sits in an IoT VLAN and may only reach go2rtc |
 
@@ -112,7 +112,7 @@ This step adds the component that shows the stream. It receives the frames in a 
      - source: github://martijnbuts/esphome-p4-doorbell@main
        components: [jpeg_stream]
    ```
-2. Make sure the device has `psram:` and an `lvgl:` section. The component checks that the chip is an ESP32-P4.
+2. Make sure the device has `psram:` and an `lvgl:` section. On the ESP32-P4 the component decodes with the chip's JPEG decoder; on other ESP32s (for example the S3) it decodes in software, which is slower (see the [component README](../components/jpeg_stream/README.md#measured)).
 
 The component reads two kinds of URL. It looks at the `Content-Type` of the answer:
 
@@ -127,19 +127,21 @@ A user name and password in the URL are sent as HTTP Basic authentication. A fra
 | --- | --- | --- |
 | `canvas` | required | The LVGL canvas to draw on; the component gives it its own buffers and size |
 | `url` | none | Start URL; usually set with `jpeg_stream.start` |
+| `decoder` | `hardware` on the ESP32-P4, `software` elsewhere | `hardware`: the ESP32-P4 JPEG decoder; `software`: JPEGDEC |
 | `max_width`, `max_height` | 640, 480 | Largest picture; sets the size of the two frame buffers in PSRAM |
 | `max_jpeg_size` | 262144 | Largest JPEG in bytes |
 | `timeout` | 5s | Network timeout; use 10s for go2rtc, which waits for a key frame |
 | `min_interval` | 0ms | Minimum time between two frames |
+| `stats_interval` | 0s (off) | Log receive, decode, hand-off and LVGL refresh times at this interval while the stream runs; see *Performance* |
 | `on_frame`, `on_error` | none | Automations after each frame and after each error |
 
-Actions: `jpeg_stream.start` (with an optional `url`), `jpeg_stream.stop` and `jpeg_stream.set_url`. Condition: `jpeg_stream.is_running`. In a lambda, `get_last_frame_time()` gives the decode time of the last frame, `get_dropped_count()` the skipped frames and `get_last_shown()` the `millis()` of the last frame on the canvas. When a stream starts, the log shows `First frame ... ms after start`. The option `stats_interval` (default `0s`, off) logs where the time goes; see *Performance*.
+Actions: `jpeg_stream.start` (with an optional `url`), `jpeg_stream.stop` and `jpeg_stream.set_url`. Condition: `jpeg_stream.is_running`. In a lambda, `get_last_frame_time()` gives the decode time of the last frame, `get_dropped_count()` the skipped frames and `get_last_shown()` the `millis()` of the last frame on the canvas. When a stream starts, the log shows `First frame ... ms after start`.
 
 ## Step 4: Add the doorbell page
 
 This step adds the page that opens on a ring, as a package from the repository. It brings the page, the scripts, the fallback to Home Assistant snapshots and a button *Open doorbell camera* in Home Assistant.
 
-Do you have the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B? Then start from the complete example `example/waveshare-p4-7b.yaml` in the repository. It has the display, touch, Wi-Fi, the speaker and a home page with a video button. It compiles with ESPHome 2026.11.0-dev and validates with 2026.11.0b3 and 2026.12.0-dev (10 November 2026); its doorbell part is an English copy of the configuration that runs on the tested display. Otherwise add the package to your own configuration:
+Do you have the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B? Then start from the complete example `example/waveshare-p4-7b.yaml` in the repository. It has the display, touch, Wi-Fi, the speaker and a home page with a video button. It validates with ESPHome 2026.12.0-dev and ESP-IDF 6.1.1 (28 November 2026); its doorbell part is an English copy of the configuration that runs on the tested display. Otherwise add the package to your own configuration:
 
 1. Put the go2rtc password in `secrets.yaml` of ESPHome:
 
@@ -185,7 +187,7 @@ Do you have the Waveshare ESP32-P4-WIFI6-Touch-LCD-7B? Then start from the compl
    ```
 4. In ESPHome click **Validate**, then **Install → Wirelessly**.
 
-The page uses two LVGL frame buffers of 640×480 in PSRAM (about 1.2 MB) and a JPEG buffer of 256 KB. They are made the first time the page opens and stay for the next time.
+The component uses two frame buffers of 640×480 in PSRAM (about 1.2 MB) and a JPEG buffer of 256 KB. They are made once at boot and kept, so nothing is allocated while the stream runs; if they cannot be made, the component is marked failed and the log says why.
 
 Optional: does your doorbell have a person (or motion) sensor in Home Assistant? Then add `example/prewarm.yaml` as a second file of the package, with the vars `presence_sensor: <presence-sensor>` and `prewarm_hold: 30s` (the complete example shows how). It starts the stream invisibly when the sensor turns on, so the picture is there at once when someone rings, and stops it 30 s after the sensor turned off. Do the go2rtc `preload` from Step 1 first: a person sensor usually fires only 1–3 s before the ring. The package also adds a button Prewarm doorbell stream in Home Assistant that does the same for 30 s: handy to test, or for an automation (for example when the garden gate opens).
 
@@ -363,9 +365,9 @@ What made the difference:
 
 - **No `clip_corner`** (rounded corners) on the card around the picture: about 10 ms per frame. The package no longer uses it.
 - **No LVGL rotation**: `rotation: 180` turned every refresh with the PPA into an extra 1.2 MB buffer: 13 ms per frame. If your display hangs upside down, turn the display around instead and remove the rotation; touch follows by itself.
-- **ESP-IDF 6.x and LVGL drawing the picture with the PPA**: 8 ms per frame. With ESP-IDF 6.0 or newer (`esp32: framework: version: 6.1.0`; measured with 6.0.1) ESPHome turns on the LVGL PPA draw unit for fills; drawing images with it is a separate LVGL option. Add it as a build flag: `esphome: build_flags: [-DLV_USE_PPA_IMG=1]`.
+- **ESP-IDF 6 and LVGL drawing the picture with the PPA**: 8 ms per frame (measured with ESP-IDF 6.0.1). With ESP-IDF 6, the default of ESPHome dev, ESPHome turns on the LVGL PPA draw unit for fills; drawing images with it is a separate LVGL option. Add it as a build flag: `esphome: build_flags: [-DLV_USE_PPA_IMG=1]` (the complete example has it).
 
-One known risk on the ESP32-P4: the hardware JPEG decoder and the PPA share the 2D-DMA controller, which can hang under load ([esp-idf#19108](https://github.com/espressif/esp-idf/issues/19108), still open on 10 November 2026). With `LV_USE_PPA_IMG` both run for every frame. On ESPHome's default ESP-IDF 5.5 LVGL does not draw with the PPA at all, so the decoder only meets the PPA when LVGL has a `rotation`. PERFORMANCE.md describes it and two ways to keep them apart.
+One known risk on the ESP32-P4: the hardware JPEG decoder and the PPA share the 2D-DMA controller, which can hang under load ([esp-idf#19108](https://github.com/espressif/esp-idf/issues/19108), still open on 28 November 2026). With ESP-IDF 6 LVGL draws fills with the PPA, and with `LV_USE_PPA_IMG` the doorbell picture too, so both run for every frame. PERFORMANCE.md describes the risk and two ways to keep them apart.
 
 The start-up is set by go2rtc, not by the display: 7.7 s from opening the page to the first frame without `preload`, 0.13 s with it.
 
@@ -431,7 +433,6 @@ These problems came up while building this.
 | The first frame takes several seconds | ffmpeg waits for a key frame of the camera | Keep `timeout: 10s`; add preload: doorbell\_mjpeg: video to go2rtc.yaml (Step 1) for a first frame in about 0.1 s |
 | `OTA with 32MB flash requires 'enable_idf_experimental_features'` | ESPHome rule for boards with 32 MB flash | Add `enable_idf_experimental_features: true` under `esp32: framework: advanced:` |
 | go2rtc web page asks for a login | The API password also protects the web page | Log in with the user name and password from `go2rtc.yaml` |
-| `'active_high' is a required option for [esp32_hosted]` | ESPHome 2026.10 still needs it; 2026.11 and newer ignore it and warn that it is deprecated | On ESPHome 2026.10 add `active_high: true` under `esp32_hosted:`; on 2026.11 and newer leave it out |
 | **Talk** shows *Failed* | go2rtc could not play the microphone: the talk stream is missing or its camera refuses two-way audio, or go2rtc cannot reach the display on port 8555 | The log says which (`go2rtc refused to play (HTTP ...)`, `not reachable` or `closed the microphone stream`); check Step 2 and 3 of *Talk back* |
 | Ring light stays blue, the chime is silent | A backchannel is still open, e.g. `?backchannel=1` on an always-on stream ([go2rtc#1860](https://github.com/AlexxIT/go2rtc/issues/1860)) | Talk only through the separate `doorbell_talk` stream; restart the go2rtc add-on to free it |
 | A whistle while talking | The doorbell hears its own speaker through the display | The package stops the doorbell audio while you talk; lower `mic_gain` or the doorbell's speaker volume |
