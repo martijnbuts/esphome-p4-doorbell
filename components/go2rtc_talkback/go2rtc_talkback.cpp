@@ -169,7 +169,7 @@ void Go2rtcTalkback::serve_() {
       }
       int one = 1;
       setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-      struct sockaddr_in addr {};
+      struct sockaddr_in addr{};
       addr.sin_family = AF_INET;
       addr.sin_port = htons(this->port_);
       addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -181,13 +181,11 @@ void Go2rtcTalkback::serve_() {
         continue;
       }
       // accept() returns at least once a second
-      struct timeval tv {
-        .tv_sec = 1, .tv_usec = 0
-      };
+      struct timeval tv{.tv_sec = 1, .tv_usec = 0};
       setsockopt(listen_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     }
 
-    struct sockaddr_in peer {};
+    struct sockaddr_in peer{};
     socklen_t peer_len = sizeof(peer);
     const int fd = ::accept(listen_fd, (struct sockaddr *) &peer, &peer_len);
     if (fd < 0)
@@ -223,9 +221,7 @@ static void put_le(uint8_t *p, uint32_t value, int bytes) {
 }
 
 void Go2rtcTalkback::serve_client_(int fd) {
-  struct timeval tv {
-    .tv_sec = 2, .tv_usec = 0
-  };
+  struct timeval tv{.tv_sec = 2, .tv_usec = 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
   int one = 1;

@@ -50,7 +50,9 @@ Go2rtcTalkback = go2rtc_talkback_ns.class_("Go2rtcTalkback", cg.Component)
 def _validate_base_url(value):
     value = cv.url(value)
     if not value.startswith("http://"):
-        raise cv.Invalid("url must start with http:// (go2rtc's API on the local network)")
+        raise cv.Invalid(
+            "url must start with http:// (go2rtc's API on the local network)"
+        )
     return value.rstrip("/")
 
 
@@ -88,9 +90,9 @@ CONFIG_SCHEMA = cv.All(
 
 FINAL_VALIDATE_SCHEMA = cv.Schema(
     {
-        cv.Required(CONF_MICROPHONE): microphone.final_validate_microphone_source_schema(
-            DOMAIN
-        ),
+        cv.Required(
+            CONF_MICROPHONE
+        ): microphone.final_validate_microphone_source_schema(DOMAIN),
     },
     extra=cv.ALLOW_EXTRA,
 )
