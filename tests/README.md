@@ -7,8 +7,10 @@ move into an ESPHome pull request unchanged:
 - `common.yaml` – configuration shared by all targets
 - `test.<target>.yaml` – one per build target (`esp32-s3-idf`, `esp32-p4-idf`), with the board
   specific parts (PSRAM, display) and `<<: !include common.yaml`
-- `test-software.esp32-p4-idf.yaml` – the P4 with the software encoder/decoder instead of the
-  hardware one
+- `test-software.esp32-p4-idf.yaml` (`jpeg_stream`) – the P4 with the software decoder instead of
+  the hardware one
+- `test-hardware.esp32-p4-idf.yaml` (`lvgl_screenshot`, `camera_encoder`) – the P4 with the
+  `hardware` type of `camera_encoder` instead of the default software encoder
 
 They have no `esphome:` or `esp32:` block: ESPHome's test runner adds those from
 `tests/test_build_components/build_components_base.<target>.yaml`.
@@ -25,16 +27,16 @@ esp32:
   variant: esp32s3          # or esp32p4, matching the test file
   framework:
     type: esp-idf
+logger:
 packages:
   under_test: !include tests/components/jpeg_stream/test.esp32-s3-idf.yaml
 external_components:
   - source:
       type: local
       path: components
-    components: [jpeg_stream]
+    components: [jpeg_stream]   # add camera_encoder for the test-hardware files
 ```
 
 Then `esphome config <file>` validates it and `esphome compile <file>` builds it.
 
-Checked on 14 November 2026 with ESPHome 2026.12.0-dev: all six files validate and generate the
-expected code (hardware or software path).
+Checked on 28 November 2026 with ESPHome 2026.12.0-dev: all seven files validate.

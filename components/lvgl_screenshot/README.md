@@ -2,14 +2,16 @@
 
 An ESPHome component that shows what an LVGL display shows as a camera entity in Home Assistant.
 A screenshot is only made when Home Assistant asks for one, so a display nobody looks at costs
-no CPU and no memory.
+no CPU time.
 
 It is handy to check a wall display from a distance, to see what a remote device is showing
 when someone reports a problem, and for documentation (the picture is the LVGL screen itself,
 pixel for pixel).
 
-Status: an external component, used daily on two displays (see *Tested on*). It is meant as a
-starting point for discussing a native ESPHome feature; see *Proposal for ESPHome* at the end.
+Status: an external component, used daily on two displays (see *Tested on*). The same code is
+proposed for ESPHome itself (branch
+[`lvgl-screenshot`](https://github.com/martijnbuts/esphome_new/tree/lvgl-screenshot) of
+martijnbuts/esphome_new); see *ESPHome* at the end.
 
 ## Configuration
 
@@ -24,10 +26,9 @@ lvgl_screenshot:
   name: "Screen"            # becomes camera.<device>_screen in Home Assistant
 ```
 
-On an ESP32-P4 the picture is encoded by the chip's hardware JPEG encoder. On other ESP32s
-(for example the S3) ESPHome's [`camera_encoder`](https://esphome.io/components/camera/camera_encoder/)
-is loaded automatically and encodes it in software. Add a `camera_encoder:` block to change its
-settings; it is picked up without further configuration:
+The JPEG is made by ESPHome's [`camera_encoder`](https://esphome.io/components/camera/camera_encoder/).
+Without a `camera_encoder:` block one with default settings (software, quality 80) is added. Add the
+block to change its settings; it is picked up without further configuration:
 
 ```yaml
 camera_encoder:
@@ -37,13 +38,32 @@ lvgl_screenshot:
   name: "Screen"
 ```
 
+On an ESP32-P4 the chip's JPEG codec can do the encoding. That needs the `hardware` type, which is
+in the [`camera_encoder`](../camera_encoder) copy in this repository until ESPHome has it:
+
+```yaml
+external_components:
+  - source: github://martijnbuts/esphome-p4-doorbell@main
+    components: [lvgl_screenshot, camera_encoder]
+
+camera_encoder:
+  type: hardware
+  quality: 85
+  subsampling: "4:4:4"      # keeps small coloured text sharp
+
+lvgl_screenshot:
+  name: "Screen"
+```
+
 | Option | Default | What it does |
 | --- | --- | --- |
 | `name`, `id`, `icon`, `internal`, … | | The usual entity options |
 | `stream_interval` | `1s` | Time between pictures while the live view is open in Home Assistant |
-| `jpeg_quality` | `85` | ESP32-P4 hardware encoder only: quality 10–100 (4:4:4, so small coloured text stays sharp). Elsewhere set `quality` under `camera_encoder:`; using `jpeg_quality` there is a validation error |
-| `encoder` | | ID of a `camera_encoder` to use; also forces the software encoder on a P4. Without it, a P4 uses its hardware encoder and other chips use the only `camera_encoder` |
-| `task_priority` | `1` | Software encoder only: FreeRTOS priority of the encoding task |
+| `encoder` | | ID of the `camera_encoder` to use; only needed when there is more than one |
+
+Coming from the version before 28 November 2026: `jpeg_quality` and `task_priority` are gone. On
+the P4, replace `jpeg_quality: 85` with the `camera_encoder` block above (`type: hardware`,
+`quality: 85`); elsewhere nothing changes.
 
 ## How it works
 
@@ -51,113 +71,97 @@ lvgl_screenshot:
 2. In the main loop, the component renders the active LVGL screen once more with
    `lv_snapshot_take_to_draw_buf()` into an RGB565 buffer (LVGL is not thread-safe, so this
    step has to run there).
-3. The buffer is encoded to JPEG:
-   - **ESP32-P4:** `esp_driver_jpeg` (hardware), directly in the main loop; it takes a few ms.
-   - **Other chips:** a FreeRTOS task hands the buffer to the `camera_encoder` (esp32-camera's
-     `fmt2jpg`). LVGL renders RGB565 little endian and esp32-camera expects big endian, so the
-     task swaps the bytes in place first. Calling esp32-camera's global
-     `jpg_set_rgb565_big_endian(false)` instead would also change real cameras.
+3. A FreeRTOS task of the component hands the buffer to the `camera_encoder`, so the main loop
+   and the display keep running while it encodes. LVGL renders RGB565 low byte first and camera
+   encoders expect the high byte first (as a camera sends it), so the task swaps the bytes first.
+   When the encoder asks for a retry (after it grew its output buffer), the task tries again; the
+   encoder stops asking once its buffer cannot grow.
 4. The JPEG is published through `camera::Camera` like any ESPHome camera, so it travels over
    the encrypted API connection.
 
-Memory: all buffers are created on the first request and then kept.
+Memory, all reserved in `setup()` and then kept:
 
-- the raw screen buffer: width × height × 2 bytes (PSRAM when available, otherwise internal RAM);
-- the JPEG output buffer: on the P4 half the raw size, on other chips the `camera_encoder`
-  buffer, which starts at a quarter of the raw size and grows when needed;
-- on other chips, a 6 kB task stack in internal RAM.
+- the screen buffer: width × height × 2 bytes, allocated by LVGL (aligned for its 2D accelerator,
+  the PPA on the ESP32-P4); in practice in PSRAM;
+- room in the encoder's output buffer for 2 bits per pixel (width × height / 4 bytes), unless its
+  `buffer_size` is larger already. Without this, the default encoder's buffer would start at 4 kB
+  and grow by 1 kB per retry, and every retry encodes the whole screen again;
+- a 6 kB task stack in internal RAM.
 
-The published image points straight into the output buffer: no copy per screenshot. That is
-safe because the next screenshot is only made once every API connection has released the
+The published image points straight into the encoder's output buffer: no copy per screenshot.
+That is safe because the next screenshot is only made once every API connection has released the
 previous one.
 
 ## Measured
 
-| | ESP32-P4, 1024×600 (hardware) | ESP32-S3, 800×480 (software) |
+ESP32-P4, 1024×600 dashboard (Waveshare 7B), ESP-IDF 6.1.1:
+
+| | Software encoder (default) | Hardware encoder (`type: hardware`) |
 | --- | --- | --- |
-| Render (`lv_snapshot`, main loop) | 76 ms | 125 ms |
-| JPEG encode | 12 ms (main loop) | 425 ms (own task) |
-| JPEG size, dashboard | 115 kB (quality 85) | 70 kB (quality 85) |
-| Encoding task stack never used | – | 3828 of 6144 bytes |
+| Render (`lv_snapshot`, main loop) | 48–49 ms | 48–52 ms |
+| Encode (own task, including the byte swap) | 341–348 ms | 85–103 ms |
+| JPEG size | 82 kB (quality 80) | 109 kB (quality 85, 4:4:4) |
 
-Measured on 14 November 2026 with the dashboards shown on these displays. The first screenshot
-after boot logs these numbers at INFO, later ones at DEBUG:
-`First screenshot 800x480, 69958 bytes (render 125 ms, jpeg 425 ms)`.
+Measured on 27 and 28 November 2026. The times are in the log at VERBOSE:
+`Screenshot 1024x600, 82072 bytes (render 48 ms, encode 348 ms)`.
 
-The render step is the weak point: on both chips it is above the 50 ms ESPHome allows a
-component per loop (on the S3 ESPHome logged `lvgl_screenshot took a long time for an
-operation (125 ms), max is 50 ms`). Moving the encoder to a task fixed the much longer
-encode, but rendering still has to happen where LVGL runs. See the open questions below.
+The render step is the weak point. ESPHome warns when a component holds up the main loop for more
+than 50 ms; on the P4 that happened only for the first screenshot after boot (71 ms). Slower chips
+take longer: the ESP32-S3 with an 800×480 panel needed 125 ms with the previous version of this
+component.
+
+The previous version (until 27 November 2026) encoded on the P4 in the main loop and held it up
+for 177 ms per screenshot.
 
 ## Tests
 
 [`tests/components/lvgl_screenshot`](../../tests/components/lvgl_screenshot) has test
-configurations in the layout of ESPHome's own tests: ESP32-S3 (software, with a `camera_encoder`
-block), ESP32-P4 (hardware) and ESP32-P4 with an explicit software `encoder`; see
-[`tests/README.md`](../../tests/README.md).
+configurations in the layout of ESPHome's own tests: ESP32-S3 and ESP32-P4 with the default
+encoder, and the ESP32-P4 with the hardware encoder; see [`tests/README.md`](../../tests/README.md).
 
 ## Tested on
 
-- Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024×600, MIPI DSI), ESP-IDF 6.1.1, LVGL 9.6
-  (21 November 2026: render 74 ms, JPEG 12 ms, 111 kB)
-- ESP32-S3 (N16R8) with an 800×480 RGB panel, ESP-IDF 5.5, LVGL 9.6; also builds with
-  ESP-IDF 6.1.1 (not yet run on the device)
-- ESPHome 2026.12.0-dev (21 November 2026); compiles for both chips
+- Waveshare ESP32-P4-WIFI6-Touch-LCD-7B (1024×600, MIPI DSI), ESP-IDF 6.1.1, LVGL 9.6,
+  ESPHome 2026.12.0-dev: both encoders (27 and 28 November 2026), also while `jpeg_stream`
+  decodes a doorbell stream with the same JPEG codec
+- ESP32-S3 (N16R8) with an 800×480 RGB panel, LVGL 9.6, with the software encoder
 
 ## Limitations
 
 - **Only the active screen.** Widgets on LVGL's top and system layers (for example a message
   box on `lv_layer_top`) are not in the picture.
-- **Rendering runs in the main loop**, so a screenshot holds it up for 76–125 ms on the tested
-  displays (see *Measured*). Keep `stream_interval` at 1 s or more.
-- **ESP32-P4: the screen size must be a multiple of 8** in both directions (4:4:4 JPEG blocks).
-  Otherwise no picture is made and the log says so. The software encoder has no such limit.
-- **ESP32-P4: the JPEG engine is shared** with the hardware JPEG decoder. The driver serialises
-  them, so a screenshot waits for a running decode (a few ms).
-- **ESP-IDF only** (the P4 hardware encoder and esp32-camera both need it).
+- **Rendering runs in the main loop**, so a screenshot holds it up for about 50 ms on the P4
+  (see *Measured*). Keep `stream_interval` at 1 s or more.
+- **One camera per device:** ESPHome supports one camera, so this cannot be combined with
+  `esp32_camera` or `mipi_csi`.
+- **ESP-IDF only** (esp32-camera's encoder and the P4 codec both need it).
 - **Privacy:** everyone who can see the camera entity in Home Assistant sees the screen.
 
-## Proposal for ESPHome
+## ESPHome
 
-This works as one external component, but upstream I think it fits better as three small
-pieces:
+The component is split for ESPHome into two pull requests that do not depend on each other:
 
-1. **lvgl:** an option to enable LVGL's snapshot API (`LV_USE_SNAPSHOT`, off in the generated
-   `lv_conf.h`). This component now sets it with a build flag.
-2. **camera_encoder:** a new encoder type for the ESP32-P4 hardware JPEG encoder, next to the
-   existing software type `esp32_camera`. Other cameras on the P4 could use it as well.
-3. **An LVGL screenshot camera** that renders the active screen and hands it to any
-   `camera_encoder`, always encoding outside the main loop. That removes the
-   `jpeg_quality`/`quality` split between the P4 and other chips.
+1. **camera_encoder:** `type: hardware` for the ESP32-P4 JPEG codec (branch
+   [`camera-encoder-hardware`](https://github.com/martijnbuts/esphome_new/tree/camera-encoder-hardware)).
+   Other cameras on the P4 could use it as well.
+2. **lvgl_screenshot:** this component, which works with any `camera_encoder` (branch
+   [`lvgl-screenshot`](https://github.com/martijnbuts/esphome_new/tree/lvgl-screenshot)). It turns
+   on `LV_USE_SNAPSHOT` with `lvgl`'s existing `add_lv_use()`, so `lvgl` itself needs no change.
 
 Related work: [n-IA-hane/esphome-screenshot](https://github.com/n-IA-hane/esphome-screenshot)
 captures LVGL during a normal refresh (or the P4 MIPI DSI framebuffer), encodes in software and
 serves the JPEG over HTTP. This component instead renders on request and uses ESPHome's camera
 entity, so the picture goes over the native API without the web server.
 
-In ESPHome itself (checked 21 November 2026):
+In ESPHome itself:
 
 - [esphome#19421](https://github.com/esphome/esphome/pull/19421) (merged, 2026.10) added the
   `snapshot` component: `snapshot.take` writes what a display shows to a BMP or animated GIF
-  file. It only runs on the `host` platform, but its `Snapshot` base class (a display that can
-  hand over its pixels) is a model a screenshot camera could use.
+  file. It only runs on the `host` platform.
 - [esphome#22789](https://github.com/esphome/esphome/pull/22789) (open) lets other components
   read back the finished picture of a `mipi_dsi` panel, including video drawn outside LVGL. On
-  the P4 that would replace the second render with a copy of the frame buffer.
-
-Open questions for the maintainers:
-
-- **How to avoid the long render in the main loop?** `lv_snapshot` renders the whole screen in
-  one call. Options I see: render a few rows per loop with a clipped area, capture the pixels
-  during LVGL's normal refresh (the flush callback sees every rendered area; this saves the
-  second render but needs a full refresh and only works when the display driver gets all
-  pixels), read the display's frame buffer back where the driver allows it (esphome#22789 for
-  `mipi_dsi`), or accept it for an on-demand diagnostic feature.
-- Should the screenshot camera be its own component, or part of `lvgl` (for example a
-  `camera` option on the `lvgl:` block)?
-- Should the top and system layers be included in the picture?
-- Is creating the buffers on the first request acceptable (they are large, and most displays
-  are never looked at), or should they be allocated in `setup()`?
+  the P4 that would replace the second render with a copy of the frame buffer, and avoid the
+  render time in the main loop.
 
 ## License
 

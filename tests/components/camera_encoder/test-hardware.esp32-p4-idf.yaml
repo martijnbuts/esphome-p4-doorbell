@@ -1,0 +1,2 @@
+packages:
+  camera_encoder: !include common-hardware.yaml

@@ -19,22 +19,9 @@ display:
   - platform: mipi_dsi
     model: WAVESHARE-ESP32-P4-WIFI6-TOUCH-LCD-7B
 
-wifi:
-  ssid: MySSID
-  password: password1
-
-api:
-
-lvgl:
-  widgets:
-    - label:
-        text: Hello
-
 camera_encoder:
-  id: software_encoder
-  quality: 70
+  type: hardware
+  quality: 85
+  subsampling: "4:4:4"
 
-lvgl_screenshot:
-  name: Screen
-  encoder: software_encoder
-  task_priority: 2
+<<: !include common.yaml

@@ -1,0 +1,7 @@
+camera_encoder:
+  type: hardware
+  id: hardware_jpeg_encoder
+  quality: 90
+  subsampling: "4:4:4"
+  buffer_size: 32768
+  buffer_expand_size: 16384

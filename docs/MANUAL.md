@@ -296,59 +296,52 @@ Still open (10 November 2026): the delay (others report 1–2 s with Reolink, al
 
 This step adds a camera entity to Home Assistant that shows what the display shows. It is handy to check the doorbell page or a dashboard from a distance, and for documentation. The `lvgl_screenshot` component has nothing to do with the camera snapshots of the fallback: those come *from* Home Assistant, this picture goes *to* Home Assistant.
 
-1. Add the component next to `jpeg_stream`:
+1. Add the component next to `jpeg_stream`. On the ESP32-P4 also add `camera_encoder` from this repository, for the chip's JPEG codec:
 
    ```yaml
    external_components:
      - source: github://martijnbuts/esphome-p4-doorbell@main
-       components: [jpeg_stream, lvgl_screenshot]
+       components: [jpeg_stream, lvgl_screenshot, camera_encoder]
+
+   camera_encoder:
+     type: hardware        # ESP32-P4 only; leave out this line (and camera_encoder above) on other chips
+     quality: 85
+     subsampling: "4:4:4"  # keeps small coloured text sharp
 
    lvgl_screenshot:
      name: "Screen"
-     jpeg_quality: 85      # ESP32-P4 only; leave it out on other chips
    ```
 2. Install the firmware. Home Assistant adds `camera.<device>_screen` to the device by itself.
 
-How it works: when Home Assistant asks for a picture, the component renders the active LVGL screen once more with `lv_snapshot` (RGB565) and encodes it to JPEG. The picture goes over the encrypted ESPHome API like that of any ESPHome camera. When nobody asks, nothing happens and no memory is used.
+How it works: when Home Assistant asks for a picture, the component renders the active LVGL screen once more with `lv_snapshot` (RGB565) in the main loop, and a task of its own hands it to the `camera_encoder`, which makes the JPEG. The picture goes over the encrypted ESPHome API like that of any ESPHome camera. When nobody asks, nothing happens.
 
 Which JPEG encoder:
 
-| Chip | Encoder | Where it runs |
+| `camera_encoder` | Encoder | Time for a 1024×600 screen (P4) |
 | --- | --- | --- |
-| ESP32-P4 | Hardware JPEG encoder (`esp_driver_jpeg`), a few ms | Main loop |
-| ESP32-S3 and other ESP32s | Software JPEG from ESPHome's [`camera_encoder`](https://esphome.io/components/camera/camera_encoder/) (esp32-camera), loaded automatically | Its own FreeRTOS task, so the main loop and the display keep running while it encodes |
-| Any chip with `encoder:` set | The `camera_encoder` you name | Its own task |
+| No block, or no `type` | Software JPEG from ESPHome's [`camera_encoder`](https://esphome.io/components/camera/camera_encoder/) (esp32-camera), quality 80 by default | 341–348 ms |
+| `type: hardware` (ESP32-P4, from this repository's [`camera_encoder`](../components/camera_encoder)) | The chip's JPEG codec (`esp_driver_jpeg`) | 85–103 ms |
 
-The configuration is the same on every chip. On an S3 you can set the software encoder's quality with a `camera_encoder:` block; it is picked up automatically:
-
-```yaml
-camera_encoder:
-  quality: 85              # 1–100, default 80
-  buffer_size: 131072      # optional: start size of the JPEG buffer; it grows when needed
-
-lvgl_screenshot:
-  name: "Screen"
-```
+Both run in the component's own FreeRTOS task, so the main loop and the display keep running while the picture is encoded.
 
 | Option | Default | What it does |
 | --- | --- | --- |
 | `name`, `id`, `icon`, `internal`, … | | The usual entity options |
-| `jpeg_quality` | `85` | ESP32-P4 hardware encoder only: JPEG quality, 10–100. The encoder uses 4:4:4, so small coloured text stays sharp. On other chips set `quality` under `camera_encoder:` (using `jpeg_quality` there is an error) |
 | `stream_interval` | `1s` | Time between pictures while the live view of the camera is open in Home Assistant |
-| `encoder` | | ID of a `camera_encoder` to use instead of the hardware encoder (also on the P4) |
-| `task_priority` | `1` | Software encoder only: FreeRTOS priority of the encoding task. 1 is the same as the main loop; on a dual-core chip the task then mostly runs on the other core |
+| `encoder` | | ID of the `camera_encoder` to use; only needed when there is more than one |
+
+Coming from the version before 28 November 2026: `jpeg_quality` and `task_priority` are gone. On the P4, replace `jpeg_quality: 85` with the `camera_encoder` block above.
 
 Points to know:
 
-- **Any ESP32 with LVGL**: the component turns on `LV_USE_SNAPSHOT` (off in the `lv_conf.h` ESPHome generates). On the P4 it also adds the ESP-IDF `esp_driver_jpeg` component; on other chips `camera_encoder` adds Espressif's `esp32-camera` library (only its JPEG code is used).
-- **Memory**: the first picture allocates the raw screen buffer, which stays: width × height × 2 (1.2 MB at 1024×600, 750 KB at 800×480). It goes in PSRAM when there is PSRAM, otherwise in internal RAM, which only fits small screens. The P4 also keeps a JPEG output buffer of half that size; the software encoder keeps its output buffer (starts at a quarter of the raw size and grows when needed). The picture is sent straight from that output buffer (no copy); the next one is only made once Home Assistant has received it. On other chips the encoding task (6 kB stack, internal RAM) is also started on the first picture. A 1024×600 dashboard at quality 85 was 115 KB on the P4, an 800×480 one 70 KB on an S3 (measured 14 November 2026).
+- **Any ESP32 with LVGL**: the component turns on `LV_USE_SNAPSHOT` (off in the `lv_conf.h` ESPHome generates). The software encoder adds Espressif's `esp32-camera` library (only its JPEG code is used); the hardware type adds the ESP-IDF `esp_driver_jpeg` component.
+- **Memory**, all reserved at boot: the screen buffer, width × height × 2 (1.2 MB at 1024×600, 750 KB at 800×480), allocated by LVGL and in practice in PSRAM; room in the encoder's JPEG buffer for 2 bits per pixel (150 KB at 1024×600), unless its `buffer_size` is larger; and the encoding task (6 kB stack, internal RAM). The hardware encoder also keeps its own copy of the screen for the codec's DMA. The picture is sent straight from the JPEG buffer (no copy); the next one is only made once Home Assistant has received it.
 - **Only the active screen**: widgets on LVGL's top or system layer (for example a message box shown on `lv_layer_top`) are not in the picture. The picture is the LVGL screen itself, not a read-back of the panel.
-- **P4: the screen size must be a multiple of 8** in both directions (1024×600 is). Otherwise the log says `Screen size ... is not a multiple of 8` and no picture is made. The software encoder has no such limit.
-- **Time**: rendering always happens in the main loop (LVGL is not thread-safe). On the P4 the hardware encode does too (a few ms). The software encode runs in its own task and takes longer. Measured 14 November 2026: P4 1024×600 render 76 ms + JPEG 12 ms; S3 800×480 render 125 ms (main loop; ESPHome then logs `lvgl_screenshot took a long time`) + JPEG 425 ms (own task). The log shows both times (`Screenshot 800x480, ... bytes (render ... ms, jpeg ... ms)`; the first after boot at INFO, the rest at DEBUG). Keep `stream_interval` at 1 s or more.
-- **P4: shares the JPEG engine with `jpeg_stream`**: the ESP-IDF driver lets only one of them use the engine at a time, so a screenshot waits until a doorbell frame is decoded (a few ms). Both use DMA2D; see *DMA2D: JPEG decoder and PPA* in [PERFORMANCE.md](PERFORMANCE.md#dma2d-jpeg-decoder-and-ppa).
+- **Time**: rendering happens in the main loop (LVGL is not thread-safe): 48–52 ms for 1024×600 on the P4 (measured 27 and 28 November 2026). ESPHome warns above 50 ms (`lvgl_screenshot took a long time`); on the P4 that happened only for the first picture after boot. Slower chips take longer. The log shows the times at VERBOSE (`Screenshot 1024x600, ... bytes (render ... ms, encode ... ms)`). Keep `stream_interval` at 1 s or more.
+- **P4: shares the JPEG codec with `jpeg_stream`**: the ESP-IDF driver lets only one of them use it at a time, so a screenshot waits until a doorbell frame is decoded (a few ms). Tested: 254 doorbell frames in 30 s with 0 errors while 6 screenshots were made. Both use DMA2D; see *DMA2D: JPEG decoder and PPA* in [PERFORMANCE.md](PERFORMANCE.md#dma2d-jpeg-decoder-and-ppa).
 - **Privacy**: everyone who can see the camera entity in Home Assistant sees the screen, including the doorbell picture while the page is open.
 
-Control: open the camera entity in Home Assistant. You see the current screen, and the log of the display shows `First screenshot 1024x600, ... bytes`.
+Control: open the camera entity in Home Assistant. You see the current screen. At boot the log of the display shows `LVGL Screenshot:` with the screen size, followed by the settings of the encoder.
 
 ## Performance
 
@@ -418,7 +411,7 @@ Test each part on its own, from the network the display is in, before you rely o
 | Fallback | Stop the go2rtc add-on and open the page | After about 2 s the status says `(via HA)` at 3–4 fps |
 | Real ring | Ring the doorbell | The page opens by itself and closes after 90 s |
 | Talk back (optional) | Open the page, tap **Talk**, speak | You hear yourself at the door; the button is red with *Stop talking*; the log shows `go2rtc is fetching the microphone` |
-| Screenshot (optional) | Open `camera.<device>_screen` in Home Assistant | The picture matches the display; the log shows `First screenshot ...` |
+| Screenshot (optional) | Open `camera.<device>_screen` in Home Assistant | The picture matches the display |
 
 Start the go2rtc add-on again after the fallback test.
 
