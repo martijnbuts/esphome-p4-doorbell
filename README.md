@@ -101,7 +101,10 @@ JPEG decoder and the PPA share the DMA2D controller, which can hang under load
 ## Requirements
 
 ESP32-P4 with PSRAM, ESPHome dev with its default ESP-IDF 6.1.1 (LVGL 9.6), Home Assistant with
-the go2rtc add-on for the MJPEG stream and the audio. With ESP-IDF 6 LVGL draws with the PPA; see
+the go2rtc add-on for the MJPEG stream and the audio. Other ESP32s with PSRAM, such as the S3, also
+run `jpeg_stream`: they decode in software, which gave 6–7.5 fps on an ESP32-S3 with an 800×480
+panel instead of the camera's 10 fps (see the
+[jpeg_stream README](components/jpeg_stream/README.md#measured)). With ESP-IDF 6 LVGL draws with the PPA; see
 [Hardware acceleration at a glance](docs/PERFORMANCE.md#hardware-acceleration-at-a-glance).
 Older ESPHome releases are not tested with the current code.
 

@@ -14,14 +14,14 @@ Written for: a Reolink D340P (any Reolink with an RTSP sub-stream in Home Assist
 
 ## What you need
 
-You need a Reolink camera in Home Assistant, the go2rtc add-on and an ESP32-P4 display that runs ESPHome with LVGL.
+You need a Reolink camera in Home Assistant, the go2rtc add-on and an ESP32-P4 display that runs ESPHome with LVGL. Another ESP32 with PSRAM, such as the S3, works too: `jpeg_stream` then decodes in software, which gave 6–7.5 fps on an ESP32-S3 with an 800×480 panel instead of the camera's 10 fps (see the [component README](../components/jpeg_stream/README.md#measured)). This manual describes the ESP32-P4.
 
 | Part | Requirement | Why |
 | --- | --- | --- |
 | Reolink doorbell or camera | Added with the Reolink integration; a sub-stream of 640×480 | Home Assistant's built-in go2rtc serves its RTSP stream on 127.0.0.1:18554 |
 | Home Assistant | HA OS or Supervised (add-ons); runs on 2026.11.1 | Runs the go2rtc add-on and converts the audio for the display |
 | go2rtc add-on | From the AlexxIT add-on repository; runs on 1.9.15 | Turns the RTSP stream into MJPEG and AAC, behind a password |
-| ESP32-P4 board with display | PSRAM (the frame buffers take about 1.5 MB), Wi-Fi, LVGL; the board in ESPHome must match the chip revision (below v3.0: esp32-p4-evboard, v3.0 and newer: esp32-p4\_r3-evboard) | The P4 has a hardware JPEG decoder: 5–10 ms per frame |
+| ESP32-P4 board with display (or another ESP32 with PSRAM, see above) | PSRAM (the frame buffers take about 1.5 MB), Wi-Fi, LVGL; the board in ESPHome must match the chip revision (below v3.0: esp32-p4-evboard, v3.0 and newer: esp32-p4\_r3-evboard) | The P4 has a hardware JPEG decoder: 5–10 ms per frame |
 | ESPHome | dev, with its default ESP-IDF 6.1.1; older releases are not tested with the current code | The components use the LVGL 9.6 canvas and the ESP-IDF JPEG driver; with ESP-IDF 6 LVGL draws with the PPA |
 | Media player on the display | An ESPHome `speaker` media player with an announcement pipeline | The doorbell audio plays as an announcement and pauses music |
 | Router | Firewall rules between VLANs (the example is MikroTik RouterOS 7) | The display sits in an IoT VLAN and may only reach go2rtc |

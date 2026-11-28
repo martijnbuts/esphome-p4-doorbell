@@ -4,8 +4,9 @@
 # (script doorbell_live) opens the same page without a ring.
 #
 #   - Video: MJPEG stream from the go2rtc add-on (see example/go2rtc.yaml). The
-#     jpeg_stream component receives it in a background task and decodes every frame
-#     with the ESP32-P4 hardware JPEG decoder; the main loop only swaps the canvas buffer.
+#     jpeg_stream component receives it in a background task and decodes every frame,
+#     with the hardware JPEG decoder on an ESP32-P4 and in software on other ESP32s (such as
+#     the S3, slower); the main loop only swaps the canvas buffer.
 #   - Fallback: after 3 failed attempts with go2rtc it switches to snapshots through the
 #     camera proxy of Home Assistant (about 3-4 frames per second).
 #   - Audio: Home Assistant plays the go2rtc AAC stream (fetched over 127.0.0.1, so no
@@ -46,7 +47,7 @@ font:
     glyphs:
       - "\U000F0869"   # doorbell-video (until the first frame arrives)
 
-# Background task + hardware JPEG decoder (components/jpeg_stream), draws on canvas doorbell_video
+# Background task + JPEG decoder (components/jpeg_stream; hardware on the ESP32-P4), draws on canvas doorbell_video
 jpeg_stream:
   - id: doorbell_stream
     canvas: doorbell_video
