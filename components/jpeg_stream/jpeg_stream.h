@@ -25,26 +25,31 @@
 
 namespace esphome::jpeg_stream {
 
+/// Longest URL kept, including the terminating zero.
+static constexpr size_t MAX_URL_LENGTH = 512;
+
 /// Receives JPEG frames from an URL in a background task (an MJPEG stream, or a single image that is
 /// fetched again and again), decodes them in that task (ESP32-P4 hardware JPEG decoder, or JPEGDEC in
 /// software) and shows each frame on an LVGL canvas. The main loop only swaps the canvas buffer.
 class JpegStream final : public Component {
  public:
-  JpegStream(uint16_t max_width, uint16_t max_height, uint32_t max_jpeg_size)
-      : max_width_(max_width), max_height_(max_height), max_jpeg_size_(max_jpeg_size) {}
+  /// @param hardware_decoder Decode with the ESP32-P4 hardware JPEG decoder instead of JPEGDEC.
+  /// @param stats_interval Log performance statistics every interval while the stream runs (0 = off).
+  JpegStream(lv_obj_t *canvas, uint16_t max_width, uint16_t max_height, uint32_t max_jpeg_size, uint32_t timeout,
+             uint32_t min_interval, uint32_t stats_interval, bool hardware_decoder)
+      : canvas_(canvas),
+        max_jpeg_size_(max_jpeg_size),
+        timeout_(timeout),
+        min_interval_(min_interval),
+        stats_interval_(stats_interval),
+        max_width_(max_width),
+        max_height_(max_height),
+        hardware_decoder_(hardware_decoder) {}
 
   void setup() override;
   void loop() override;
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::LATE; }
-
-  void set_canvas(lv_obj_t *canvas) { this->canvas_ = canvas; }
-  void set_timeout(uint32_t timeout_ms) { this->timeout_ = timeout_ms; }
-  void set_min_interval(uint32_t interval_ms) { this->min_interval_ = interval_ms; }
-  /// Log performance statistics every interval while the stream runs (0 = off).
-  void set_stats_interval(uint32_t interval_ms) { this->stats_interval_ = interval_ms; }
-  /// Decode with the ESP32-P4 hardware JPEG decoder instead of JPEGDEC.
-  void set_hardware_decoder(bool hardware) { this->hardware_decoder_ = hardware; }
 
   /// Thread-safe; the new URL is used for the next frame (an open MJPEG stream is reconnected).
   void set_url(const std::string &url);
@@ -98,33 +103,33 @@ class JpegStream final : public Component {
   /// Wakes the stream task when it waits for a frame to be shown, a retry delay, or a stop.
   void wake_task_();
 
-  lv_obj_t *canvas_{nullptr};
+  lv_obj_t *canvas_;
+  uint32_t max_jpeg_size_;
+  uint32_t timeout_;
+  uint32_t min_interval_;
+  uint32_t stats_interval_;
   uint16_t max_width_;
   uint16_t max_height_;
-  uint32_t max_jpeg_size_;
-  uint32_t timeout_{5000};
-  uint32_t min_interval_{0};
-  uint32_t stats_interval_{0};
-  bool hardware_decoder_{false};
+  bool hardware_decoder_;
 
   Mutex url_mutex_;
-  std::string url_;
+  char url_[MAX_URL_LENGTH]{};
   std::atomic<bool> url_changed_{false};
 
   TaskHandle_t task_{nullptr};
   SemaphoreHandle_t wake_{nullptr};      // given by the main loop: frame shown, stop(), new URL
   std::atomic<uint32_t> stack_free_{0};  // bytes of the task's stack never used (high-water mark)
   esp_http_client_handle_t client_{nullptr};
-  std::string origin_;        // scheme://[user:password@]host[:port] the client was created for
-  bool connected_{false};     // the client holds an open connection that can be reused
-  bool multipart_{false};     // the current response is an MJPEG stream
-  char content_type_[64]{};   // Content-Type of the current response
-  uint8_t *rx_buf_{nullptr};  // receive buffer for MJPEG streams
+  char origin_[MAX_URL_LENGTH]{};  // scheme://[user:password@]host[:port] the client was created for
+  bool connected_{false};          // the client holds an open connection that can be reused
+  bool multipart_{false};          // the current response is an MJPEG stream
+  char content_type_[64]{};        // Content-Type of the current response
+  uint8_t *rx_buf_{nullptr};       // receive buffer for MJPEG streams
 #ifdef USE_JPEG_STREAM_HW_DECODER
   jpeg_decoder_handle_t decoder_{nullptr};
 #endif
 #ifdef USE_JPEG_STREAM_SW_DECODER
-  // JPEGDEC state (some 20 kB, PSRAM when there is any), created on the first start()
+  // JPEGDEC state (some 20 kB, PSRAM when there is any)
   RAMUniquePtr<JPEGDEC> jpegdec_;
 #endif
 
@@ -184,7 +189,6 @@ class JpegStream final : public Component {
   uint32_t flush_start_us_{0};
   uint32_t refresh_flush_us_{0};  // flush_cb time within the current refresh
   uint32_t flush_us_{0};          // flush_cb time (copy to the display) summed over the window
-  bool display_events_added_{false};
 
   CallbackManager<void()> frame_callback_;
   CallbackManager<void()> error_callback_;

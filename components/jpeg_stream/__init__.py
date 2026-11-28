@@ -139,18 +139,19 @@ automation.register_apply_condition(
 
 
 async def to_code(config: ConfigType) -> None:
+    canvas = await cg.get_variable(config[CONF_CANVAS])
     var = cg.new_Pvariable(
         config[CONF_ID],
+        canvas,
         config[CONF_MAX_WIDTH],
         config[CONF_MAX_HEIGHT],
         config[CONF_MAX_JPEG_SIZE],
+        config[CONF_TIMEOUT],
+        config[CONF_MIN_INTERVAL],
+        config[CONF_STATS_INTERVAL],
+        config[CONF_DECODER] == DECODER_HARDWARE,
     )
     await cg.register_component(var, config)
-    canvas = await cg.get_variable(config[CONF_CANVAS])
-    cg.add(var.set_canvas(canvas))
-    cg.add(var.set_timeout(config[CONF_TIMEOUT]))
-    cg.add(var.set_min_interval(config[CONF_MIN_INTERVAL]))
-    cg.add(var.set_stats_interval(config[CONF_STATS_INTERVAL]))
     if (url := config.get(CONF_URL)) is not None:
         cg.add(var.set_url(url))
     await automation.build_callback_automations(var, config, _CALLBACK_AUTOMATIONS)
@@ -161,7 +162,6 @@ async def to_code(config: ConfigType) -> None:
 
     if config[CONF_DECODER] == DECODER_HARDWARE:
         cg.add_define("USE_JPEG_STREAM_HW_DECODER")
-        cg.add(var.set_hardware_decoder(True))
         esp32.include_builtin_idf_component("esp_driver_jpeg")
     else:
         cg.add_define("USE_JPEG_STREAM_SW_DECODER")

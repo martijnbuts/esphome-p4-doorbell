@@ -74,9 +74,10 @@ Condition: `jpeg_stream.is_running`.
   - `software`: [JPEGDEC](https://github.com/esphome-libs/JPEGDEC) (the same build as
     `runtime_image`) in framebuffer mode, so it writes the rows straight into the frame
     buffer. On the ESP32-S3 it uses the chip's SIMD colour conversion.
-- **Memory:** nothing is allocated until the first `start()`. Then: two frame buffers
-  (`max_width` × `max_height` × 2, 600 kB each at 640×480), the JPEG buffer (`max_jpeg_size`), a 4 kB
-  receive buffer and an 8 kB task stack in internal RAM; for `software` also JPEGDEC's state.
+- **Memory:** everything is allocated in `setup()`, so nothing is allocated while the stream runs:
+  two frame buffers (`max_width` × `max_height` × 2, 600 kB each at 640×480), the JPEG buffer
+  (`max_jpeg_size`), a 4 kB receive buffer and an 8 kB task stack in internal RAM; for `software` also
+  JPEGDEC's state. The URL is kept in a fixed 512-byte buffer.
 
 ## Measured
 

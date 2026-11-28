@@ -22,7 +22,6 @@ ESPHOME_LOG_TAG(TAG, "jpeg_stream");
 static constexpr uint32_t TASK_STACK_SIZE = 8192;  // TLS handshakes run in this task
 static constexpr UBaseType_t TASK_PRIORITY = 1;    // same as the main loop task
 static constexpr uint32_t RETRY_DELAY_MS = 1000;
-static constexpr size_t MAX_URL_LENGTH = 512;
 static constexpr size_t RX_BUFFER_SIZE = 4096;
 static constexpr size_t MAX_PART_HEADER = 512;
 #ifdef USE_JPEG_STREAM_HW_DECODER
@@ -35,8 +34,34 @@ static constexpr int HTTP_STATUS_BASE = 1000000;
 static uint32_t align_up(uint32_t value, uint32_t align) { return (value + align - 1) / align * align; }
 
 void JpegStream::setup() {
-  // Buffers, decoder and task are only created on the first start(), so a page that is never
-  // opened costs no memory.
+  if (!this->allocate_()) {
+    this->mark_failed(LOG_STR("Failed to allocate the buffers"));
+    return;
+  }
+#ifdef USE_JPEG_STREAM_HW_DECODER
+  if (this->hardware_decoder_ && !this->create_decoder_()) {
+    this->mark_failed(LOG_STR("Failed to create the hardware JPEG decoder"));
+    return;
+  }
+#endif
+  if ((this->wake_ = xSemaphoreCreateBinary()) == nullptr) {
+    this->mark_failed(LOG_STR("Failed to create the wake semaphore"));
+    return;
+  }
+  if (xTaskCreate(JpegStream::task_entry_, "jpeg_stream", TASK_STACK_SIZE, this, TASK_PRIORITY, &this->task_) !=
+      pdPASS) {
+    this->mark_failed(LOG_STR("Failed to start the stream task"));
+    return;
+  }
+  if (this->stats_interval_ > 0) {
+    // Time every LVGL refresh that renders something, to see what drawing the frames costs.
+    lv_display_t *disp = lv_obj_get_display(this->canvas_);
+    lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_REFR_START, this);
+    lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_RENDER_START, this);
+    lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_REFR_READY, this);
+    lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_FLUSH_START, this);
+    lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_FLUSH_FINISH, this);
+  }
   this->disable_loop();
 }
 
@@ -59,8 +84,9 @@ void JpegStream::set_url(const std::string &url) {
   if (url.size() >= MAX_URL_LENGTH)
     ESP_LOGW(TAG, "URL is %zu characters; only the first %zu are used", url.size(), MAX_URL_LENGTH - 1);
   LockGuard guard(this->url_mutex_);
-  if (url != this->url_) {
-    this->url_ = url;
+  if (strncmp(url.c_str(), this->url_, sizeof(this->url_) - 1) != 0) {
+    strncpy(this->url_, url.c_str(), sizeof(this->url_) - 1);
+    this->url_[sizeof(this->url_) - 1] = '\0';
     this->url_changed_ = true;
   }
   this->wake_task_();
@@ -72,8 +98,6 @@ void JpegStream::wake_task_() {
 }
 
 bool JpegStream::allocate_() {
-  if (this->jpeg_buf_ != nullptr)
-    return true;
   this->jpeg_buf_ = static_cast<uint8_t *>(heap_caps_malloc(this->max_jpeg_size_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   this->rx_buf_ = static_cast<uint8_t *>(heap_caps_malloc(RX_BUFFER_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   // The hardware decoder writes whole MCU blocks (up to 16x16 pixels), so round the frame size up.
@@ -92,8 +116,7 @@ bool JpegStream::allocate_() {
     for (auto &buf : this->frame_buf_)
       buf = static_cast<uint8_t *>(heap_caps_aligned_alloc(16, frame_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     this->frame_buf_size_ = frame_size;
-    if (!this->jpegdec_)
-      this->jpegdec_ = RAMAllocator<JPEGDEC>().make_unique();
+    this->jpegdec_ = RAMAllocator<JPEGDEC>().make_unique();
     decoder_ok = static_cast<bool>(this->jpegdec_);
   }
 #endif
@@ -125,36 +148,8 @@ bool JpegStream::create_decoder_() {
 #endif
 
 void JpegStream::start() {
-  if (this->canvas_ == nullptr || !this->allocate_())
+  if (this->is_failed())
     return;
-#ifdef USE_JPEG_STREAM_HW_DECODER
-  if (this->hardware_decoder_ && this->decoder_ == nullptr && !this->create_decoder_())
-    return;
-#endif
-  if (this->wake_ == nullptr && (this->wake_ = xSemaphoreCreateBinary()) == nullptr) {
-    ESP_LOGE(TAG, "Could not create the wake semaphore");
-    return;
-  }
-  if (this->task_ == nullptr) {
-    if (xTaskCreate(JpegStream::task_entry_, "jpeg_stream", TASK_STACK_SIZE, this, TASK_PRIORITY, &this->task_) !=
-        pdPASS) {
-      ESP_LOGE(TAG, "Could not start the stream task");
-      this->task_ = nullptr;
-      return;
-    }
-  }
-  if (this->stats_interval_ > 0 && !this->display_events_added_) {
-    // Time every LVGL refresh that renders something, to see what drawing the frames costs.
-    lv_display_t *disp = lv_obj_get_display(this->canvas_);
-    if (disp != nullptr) {
-      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_REFR_START, this);
-      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_RENDER_START, this);
-      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_REFR_READY, this);
-      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_FLUSH_START, this);
-      lv_display_add_event_cb(disp, JpegStream::display_event_, LV_EVENT_FLUSH_FINISH, this);
-      this->display_events_added_ = true;
-    }
-  }
   this->enable_loop();
   if (!this->running_.exchange(true)) {
     this->reset_stats_();
@@ -325,7 +320,7 @@ void JpegStream::run_task_() {
       const uint32_t begin_us = micros();
       {
         LockGuard guard(this->url_mutex_);
-        strncpy(url, this->url_.c_str(), sizeof(url) - 1);
+        strncpy(url, this->url_, sizeof(url) - 1);
         url[sizeof(url) - 1] = '\0';
         this->url_changed_ = false;
       }
@@ -389,8 +384,10 @@ int JpegStream::open_(const char *url) {
   // the new URL has none, and a kept-alive connection only works for the same server.
   const char *host = strstr(url, "://");
   const char *path = host != nullptr ? strchr(host + 3, '/') : nullptr;
-  const std::string origin = path != nullptr ? std::string(url, path - url) : std::string(url);
-  if (this->client_ != nullptr && origin != this->origin_) {
+  const size_t origin_len = path != nullptr ? static_cast<size_t>(path - url) : strlen(url);
+  const bool same_origin = origin_len < sizeof(this->origin_) && this->origin_[origin_len] == '\0' &&
+                           strncmp(this->origin_, url, origin_len) == 0;
+  if (this->client_ != nullptr && !same_origin) {
     esp_http_client_cleanup(this->client_);
     this->client_ = nullptr;
     this->connected_ = false;
@@ -409,7 +406,9 @@ int JpegStream::open_(const char *url) {
     this->client_ = esp_http_client_init(&config);
     if (this->client_ == nullptr)
       return ESP_ERR_NO_MEM;
-    this->origin_ = origin;
+    // origin_len < MAX_URL_LENGTH, the size of both url and origin_
+    memcpy(this->origin_, url, origin_len);
+    this->origin_[origin_len] = '\0';
   } else if (esp_http_client_set_url(this->client_, url) != ESP_OK) {
     return ESP_ERR_INVALID_ARG;
   }
